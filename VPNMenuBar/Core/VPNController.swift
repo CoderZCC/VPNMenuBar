@@ -46,7 +46,25 @@ final class VPNController: ObservableObject {
                 await self?.handleNetworkChange(reachable: reachable)
             }
         }
+        networkMonitor.onInterfaceChange = { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.handleInterfaceChange()
+            }
+        }
         networkMonitor.start()
+    }
+
+    /// Primary network interface changed (e.g. WiFi A → WiFi B) without an
+    /// intermediate unreachable state. The openconnect child is still alive
+    /// but its tunnel is bound to the previous interface and cannot route, so
+    /// drop it and let the auto-reconnect path bring it back on the new
+    /// interface (which also runs cleanupStaleHostRoute — see Quirk #11).
+    private func handleInterfaceChange() async {
+        guard case .connected = state else { return }
+        await autoDisconnect()
+        if shouldAutoReconnect {
+            await connect()
+        }
     }
 
     private func handleNetworkChange(reachable: Bool) async {
