@@ -3,33 +3,29 @@
 <plist version="1.0">
 <dict>
 	<key>BuildMachineOSBuild</key>
-	<string>25B78</string>
+	<string>25D125</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
-	<key>CFBundleDisplayName</key>
-	<string>VPN MenuBar</string>
 	<key>CFBundleExecutable</key>
-	<string>VPNMenuBar</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>CFBundleIconName</key>
-	<string>AppIcon</string>
+	<string>Installer</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.example.vpnmenubar</string>
+	<string>org.sparkle-project.InstallerLauncher</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>VPNMenuBar</string>
+	<string>Installer</string>
 	<key>CFBundlePackageType</key>
-	<string>APPL</string>
+	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>2.9.1</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>MacOSX</string>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>2054</string>
 	<key>DTCompiler</key>
 	<string>com.apple.compilers.llvm.clang.1_0</string>
 	<key>DTPlatformBuild</key>
@@ -47,18 +43,15 @@
 	<key>DTXcodeBuild</key>
 	<string>17C52</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
-	<key>LSUIElement</key>
-	<true/>
+	<string>10.13</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Personal use only</string>
-	<key>NSUserNotificationAlertStyle</key>
-	<string>alert</string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/CoderZCC/VPNMenuBar/main/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>cyiD6I9dAeSGGdVG2VAADG9ecdvdLHDHBIFfnjR9zJY=</string>
+	<string>Copyright © 2016 Sparkle Project. All rights reserved.</string>
+	<key>XPCService</key>
+	<dict>
+		<key>JoinExistingSession</key>
+		<true/>
+		<key>ServiceType</key>
+		<string>Application</string>
+	</dict>
 </dict>
 </plist>

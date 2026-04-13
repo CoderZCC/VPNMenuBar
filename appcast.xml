@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>VPN MenuBar</title>
+    <link>https://github.com/CoderZCC/VPNMenuBar</link>
+    <description>VPN MenuBar update feed</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.2.0</title>
+      <sparkle:version>2</sparkle:version>
+      <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <ul>
+          <li>Added auto-update via Sparkle — future updates install with one click</li>
+          <li>Added "Check for Updates" menu item</li>
+        </ul>
+      ]]></description>
+      <pubDate>Sun, 13 Apr 2026 14:00:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.0/VPNMenuBar-0.2.0.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="Mpg1kIXa+10D2Ng71pSs/EY5RxQLJgZqyjfMkRejeKL7cUqRCL1ZKSIdbJdXC4zL1qk5/+GwFGfgWVT9UmBiDQ=="
+        length="1723420"
+      />
+    </item>
+  </channel>
+</rss>
