@@ -43,7 +43,7 @@ targets:
         NSUserNotificationAlertStyle: alert
         NSHumanReadableCopyright: "Personal use only"
         SUFeedURL: "https://raw.githubusercontent.com/CoderZCC/VPNMenuBar/main/appcast.xml"
-        SUPublicEDKey: "PLACEHOLDER_WILL_BE_REPLACED_AFTER_KEY_GENERATION"
+        SUPublicEDKey: "cyiD6I9dAeSGGdVG2VAADG9ecdvdLHDHBIFfnjR9zJY="
         SUEnableAutomaticChecks: true
     dependencies:
       - package: Sparkle
