@@ -16,6 +16,7 @@ A macOS 13+ status-bar app that wraps OpenConnect for Cisco AnyConnect-compatibl
 - **Auto-reconnect on network change** — drops the VPN cleanly when WiFi disconnects, reconnects automatically when it comes back (only if you connected manually — failed connects don't loop-retry)
 - **Stale host-route cleanup** — scrubs leftover routes from the previous WiFi gateway before each connect, fixing the "Failed to connect after WiFi switch" symptom
 - **Status-bar agent** — `LSUIElement`, no Dock icon, no notification spam
+- **Auto-update** — checks GitHub Releases for new versions via [Sparkle](https://sparkle-project.org/). One-click update from the menu bar
 
 ## Install
 
@@ -42,6 +43,14 @@ xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar \
 # The built .app is under ~/Library/Developer/Xcode/DerivedData/...
 # See CLAUDE.md "Build, run, ship" for the full distribution recipe.
 ```
+
+### Option C — download from GitHub Releases
+
+Download the latest `VPNMenuBar-x.y.z.zip` from the [Releases](https://github.com/CoderZCC/VPNMenuBar/releases/latest) page:
+
+1. Unzip → drag `VPNMenuBar.app` to `/Applications`
+2. `xattr -dr com.apple.quarantine /Applications/VPNMenuBar.app`
+3. Open the app — subsequent updates will be delivered automatically via the menu bar
 
 ## First launch
 

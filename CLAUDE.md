@@ -57,6 +57,13 @@ cp -R "$APP_SRC" ./VPNMenuBar.app
 ditto -c -k --keepParent ./VPNMenuBar.app ./VPNMenuBar-0.1.0.zip
 ```
 
+**Signing for Sparkle** (after creating the zip):
+```sh
+# sign_update is from Sparkle's tools (find it in DerivedData or download from Sparkle releases)
+/path/to/sign_update ./VPNMenuBar-X.Y.Z.zip
+# Copy the edSignature and length into appcast.xml's new <item>
+```
+
 **Launch the built app for manual smoke testing**:
 ```sh
 open ./VPNMenuBar.app       # first run will hit Gatekeeper — right-click → Open
@@ -160,6 +167,7 @@ The repo IS the distribution. Three artifacts work together:
    - `brew install openconnect` (skipped if already installed)
    - Writes `/etc/sudoers.d/vpnmenubar-<user>` with a `visudo -c -f` pre-check. Uses `/etc/sudoers.d/` (not the main `/etc/sudoers`) so uninstall is `sudo rm` of one file and a broken rule can never lock the user out of sudo
    - Handles Intel vs Apple Silicon path differences automatically
+4. **`appcast.xml`** — Sparkle appcast feed at repo root. Each release adds a new `<item>` with the version, EdDSA signature, file size, and GitHub Release download URL. Sparkle checks this file periodically to discover updates. Updated manually as part of the release workflow.
 
 Gatekeeper bypass is `xattr -dr com.apple.quarantine /Applications/VPNMenuBar.app` or right-click → Open. Document this in any user-facing instructions.
 

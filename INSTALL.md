@@ -37,6 +37,17 @@ macOS 状态栏小工具，封装 `openconnect` 连接 Cisco AnyConnect 兼容�
 > bash install-deps.sh
 > ```
 
+## 从 GitHub Releases 下载（最简单）
+
+不需要 git，直接从 Release 页面下载最新版：
+
+1. 打开 [最新 Release](https://github.com/CoderZCC/VPNMenuBar/releases/latest)，下载 `VPNMenuBar-x.y.z.zip`
+2. 解压后把 `VPNMenuBar.app` 拖到 `/Applications`
+3. 终端执行 `xattr -dr com.apple.quarantine /Applications/VPNMenuBar.app`（或者右键 → 打开 → 打开）
+4. 启动后走 Onboarding 向导
+
+之后有新版本时，app 会**自动提示更新**，点"安装更新"即可，不用再手动下载。也可以随时从状态栏菜单点 **Check for Updates…** 手动检查。
+
 ---
 
 ## 手动安装步骤
