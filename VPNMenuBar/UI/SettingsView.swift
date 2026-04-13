@@ -5,14 +5,19 @@ struct SettingsView: View {
     let configStore: ConfigStore
 
     @State private var config: VPNConfig = VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
+    @State private var originalConfig: VPNConfig = VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
     @State private var launchAtLogin: Bool = LoginItemManager.isEnabledPreference
     @State private var showSavedAlert: Bool = false
     @State private var savedAlertTitle: String = ""
     @State private var savedAlertMessage: String = ""
 
+    private var hasChanges: Bool { config != originalConfig }
+
     var body: some View {
         Form {
             Section("Required") {
+                TextField("Gateway", text: $config.gateway)
+                TextField("Server cert pin", text: $config.serverCertPin)
                 TextField("Username", text: $config.username)
                 RevealableSecureField(title: "Password prefix", text: $config.passwordPrefix)
                 RevealableSecureField(title: "TOTP secret (Base32)", text: $config.totpSecret)
@@ -23,8 +28,6 @@ struct SettingsView: View {
             }
 
             Section("Advanced") {
-                TextField("Gateway", text: $config.gateway)
-                TextField("Server cert pin", text: $config.serverCertPin)
                 TextField("openconnect path", text: $config.openconnectPath)
                 TextField("vpnc-script path", text: $config.vpncScriptPath)
                 Toggle("Skip DNS modification (use bundled vpnc-script--no-dns)",
@@ -43,6 +46,7 @@ struct SettingsView: View {
                     Spacer()
                     Button("Save") { save() }
                         .keyboardShortcut(.defaultAction)
+                        .disabled(!hasChanges)
                 }
             }
         }
@@ -59,22 +63,25 @@ struct SettingsView: View {
     private func load() {
         if let existing = (try? configStore.load()) ?? nil {
             config = existing
+            originalConfig = existing
         }
     }
 
     private func save() {
         do {
             try configStore.save(config)
-            savedAlertTitle = "Settings Saved"
-            if controller.state.isConnected {
-                savedAlertMessage = "Configuration saved. The new values will take effect on the next connection."
-            } else {
-                savedAlertMessage = "Your configuration has been saved."
+            // Close settings window and trigger a reconnect
+            NSApp.keyWindow?.close()
+            Task {
+                if controller.state.isConnected {
+                    await controller.disconnect()
+                }
+                await controller.connect()
             }
         } catch {
             savedAlertTitle = "Save Failed"
             savedAlertMessage = "The config file may be read-only — check permissions under ~/Library/Application Support."
+            showSavedAlert = true
         }
-        showSavedAlert = true
     }
 }

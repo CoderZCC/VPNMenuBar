@@ -104,6 +104,8 @@ struct OnboardingView: View {
     private var credentialsStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Credentials").font(.title2).bold()
+            TextField("Gateway (e.g. vpn.company.com)", text: $config.gateway)
+            TextField("Server cert pin (pin-sha256:...)", text: $config.serverCertPin)
             TextField("Username", text: $config.username)
             RevealableSecureField(title: "Password prefix", text: $config.passwordPrefix)
             RevealableSecureField(title: "TOTP secret (Base32)", text: $config.totpSecret)
@@ -111,7 +113,7 @@ struct OnboardingView: View {
                 ImportSecretFromImageButton(secret: $config.totpSecret, username: $config.username)
                 Spacer()
             }
-            Text("These three fields are required. Defaults for gateway, cert pin, and paths are already filled in and can be edited later in Settings → Advanced.")
+            Text("All fields above are required. Paths can be edited later in Settings → Advanced.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }

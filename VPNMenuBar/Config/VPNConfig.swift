@@ -6,9 +6,9 @@ struct VPNConfig: Codable, Equatable {
     var passwordPrefix: String
     var totpSecret: String
 
-    // Advanced — defaults migrated from vpn.py / arch-aware
-    var gateway: String = "vpn.example.com"
-    var serverCertPin: String = "pin-sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    // Required — VPN server settings (user must fill in their own values)
+    var gateway: String = ""
+    var serverCertPin: String = ""
     var openconnectPath: String = ArchDetector.defaultPaths.openconnect
     var vpncScriptPath: String = ArchDetector.defaultPaths.vpncScript
     var skipDNSModification: Bool = true
@@ -18,5 +18,6 @@ struct VPNConfig: Codable, Equatable {
 
     var isConfigured: Bool {
         !username.isEmpty && !passwordPrefix.isEmpty && !totpSecret.isEmpty
+            && !gateway.isEmpty && !serverCertPin.isEmpty
     }
 }

@@ -6,6 +6,28 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.1</title>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <ul>
+          <li>Redesigned status bar icon: white badge with cutout shield and colored status dot</li>
+          <li>Gateway and server cert pin are now required fields in onboarding</li>
+          <li>Settings save now closes the window and auto-reconnects</li>
+          <li>Save button disabled when no changes are made</li>
+          <li>Added About window with version info and GitHub link</li>
+        </ul>
+      ]]></description>
+      <pubDate>Sun, 13 Apr 2026 15:30:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.1/VPNMenuBar-0.2.1.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="IE05m0b25Hi1UTaM2vAntLI0nSk9jpmlR+1zFizBmybtwljnXzTuswr+7Y8T3PNVg6fPOOK7yeWl39cExoGOBg=="
+        length="1742285"
+      />
+    </item>
+    <item>
       <title>Version 0.2.0</title>
       <sparkle:version>2</sparkle:version>
       <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>

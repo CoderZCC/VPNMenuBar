@@ -5,6 +5,7 @@ struct MenuContentView: View {
     @ObservedObject var controller: VPNController
     var onOpenSettings: () -> Void
     var onCheckDependencies: () -> Void
+    var onAbout: () -> Void
     let updaterController: SPUStandardUpdaterController
 
     var body: some View {
@@ -44,6 +45,8 @@ struct MenuContentView: View {
         Button("Check for Updates…") {
             updaterController.checkForUpdates(nil)
         }
+
+        Button("About VPN MenuBar") { onAbout() }
 
         Divider()
 

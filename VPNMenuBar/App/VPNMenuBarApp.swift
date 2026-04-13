@@ -15,6 +15,7 @@ struct VPNMenuBarApp: App {
                 controller: coordinator.controller,
                 onOpenSettings: coordinator.openSettings,
                 onCheckDependencies: coordinator.openDependencyAlert,
+                onAbout: coordinator.openAbout,
                 updaterController: coordinator.updaterController
             )
         } label: {
@@ -58,6 +59,7 @@ final class AppCoordinator: ObservableObject {
     private var onboardingWindow: NSWindow?
     private var dependencyAlertWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var aboutWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -175,6 +177,32 @@ final class AppCoordinator: ObservableObject {
             if !self.configStore.isConfigured {
                 self.controller.markSetupIncomplete()
             }
+        }
+
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func openAbout() {
+        if let win = aboutWindow {
+            win.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let hosting = NSHostingController(rootView: AboutView())
+        let win = NSWindow(contentViewController: hosting)
+        win.title = "About VPN MenuBar"
+        win.styleMask = [.titled, .closable]
+        win.center()
+        win.isReleasedWhenClosed = false
+        aboutWindow = win
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: win,
+            queue: .main
+        ) { [weak self] _ in
+            self?.aboutWindow = nil
         }
 
         win.makeKeyAndOrderFront(nil)
