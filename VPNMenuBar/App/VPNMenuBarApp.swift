@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UserNotifications
 import Combine
+import Sparkle
 
 @main
 struct VPNMenuBarApp: App {
@@ -13,7 +14,8 @@ struct VPNMenuBarApp: App {
             MenuContentView(
                 controller: coordinator.controller,
                 onOpenSettings: coordinator.openSettings,
-                onCheckDependencies: coordinator.openDependencyAlert
+                onCheckDependencies: coordinator.openDependencyAlert,
+                updaterController: coordinator.updaterController
             )
         } label: {
             Image(nsImage: StatusBarIconFactory.image(for: coordinator.controller.state))
@@ -51,6 +53,7 @@ final class AppCoordinator: ObservableObject {
     let configStore: ConfigStore
     let dependencyChecker: DependencyChecker
     let controller: VPNController
+    let updaterController: SPUStandardUpdaterController
 
     private var onboardingWindow: NSWindow?
     private var dependencyAlertWindow: NSWindow?
@@ -66,6 +69,11 @@ final class AppCoordinator: ObservableObject {
             configStore: store,
             dependencyChecker: checker,
             openConnectProcess: OpenConnectProcess()
+        )
+        self.updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
         )
 
         Self.shared = self
