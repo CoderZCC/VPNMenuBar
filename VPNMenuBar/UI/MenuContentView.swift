@@ -1,9 +1,11 @@
 import SwiftUI
+import Sparkle
 
 struct MenuContentView: View {
     @ObservedObject var controller: VPNController
     var onOpenSettings: () -> Void
     var onCheckDependencies: () -> Void
+    let updaterController: SPUStandardUpdaterController
 
     var body: some View {
         // Status header — disabled item, shows current state + gateway hint.
@@ -38,6 +40,10 @@ struct MenuContentView: View {
         }
 
         Button("Check Dependencies…") { onCheckDependencies() }
+
+        Button("Check for Updates…") {
+            updaterController.checkForUpdates(nil)
+        }
 
         Divider()
 
