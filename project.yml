@@ -5,6 +5,11 @@ options:
     macOS: "13.0"
   createIntermediateGroups: true
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -31,12 +36,18 @@ targets:
       properties:
         CFBundleName: VPNMenuBar
         CFBundleDisplayName: VPN MenuBar
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
         LSMinimumSystemVersion: "13.0"
         LSUIElement: true
         NSUserNotificationAlertStyle: alert
         NSHumanReadableCopyright: "Personal use only"
+        SUFeedURL: "https://raw.githubusercontent.com/CoderZCC/VPNMenuBar/main/appcast.xml"
+        SUPublicEDKey: "PLACEHOLDER_WILL_BE_REPLACED_AFTER_KEY_GENERATION"
+        SUEnableAutomaticChecks: true
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.vpnmenubar
