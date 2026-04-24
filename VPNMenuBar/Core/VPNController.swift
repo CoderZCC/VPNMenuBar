@@ -142,6 +142,18 @@ final class VPNController: ObservableObject {
             startMonitoring()
         case .failed(let reason):
             AppLogger.shared.error("handshake failed: \(reason)")
+            // CRITICAL: on handshake failure openconnect may have left a
+            // zombie child that already ran vpnc-script's connect phase
+            // (DNS and route table mutated) without ever reaching the
+            // disconnect phase. Without a SIGTERM here those mutations
+            // strand the whole machine's networking until the user quits
+            // the app. Send the kill now so vpnc-script's disconnect phase
+            // restores DNS and routes.
+            let proc = openConnectProcess
+            _ = await Task.detached(priority: .userInitiated) {
+                try? proc.stop()
+            }.value
+            AppLogger.shared.info("post-failure cleanup: sent SIGTERM to any residual openconnect")
             state = .failed(reason: reason)
             // Don't auto-reconnect on failed initial connects (wrong creds, missing deps).
         }

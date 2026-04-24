@@ -212,14 +212,18 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
 
     // MARK: - pre-connect host-route cleanup
 
-    /// Unconditionally delete any cached host route to the VPN gateway before
-    /// spawning openconnect. Called at the top of `start()` — at that point no
-    /// active tunnel exists, so deleting is always safe: if the route was
-    /// correct the kernel rebuilds it on the next packet via the default
-    /// gateway; if it was stale (left over from a different network after a
-    /// SIGKILL/WiFi-switch without disconnect-phase), this is what unblocks
-    /// the connect. Best-effort — any failure is logged and openconnect
-    /// proceeds to surface its native error.
+    /// Delete the cached host route to the VPN gateway before spawning
+    /// openconnect — ONLY when a dedicated host route actually exists. If no
+    /// such route is present `/sbin/route get` falls through to the default
+    /// route and reports `destination: default`; in that case we MUST NOT
+    /// run a delete (that would wipe the system default route and kill all
+    /// networking). A dedicated host route always has a concrete IPv4 as its
+    /// destination, so we gate the delete on that.
+    ///
+    /// Called at the top of `start()` — no active tunnel exists at that
+    /// point, so deleting a concrete host route is safe: a correct one is
+    /// rebuilt by the kernel on the next packet; a stale one is what we want
+    /// gone. Best-effort — failures are logged and openconnect proceeds.
     private func cleanupStaleHostRoute(forGateway gateway: String) {
         let host = Self.extractHost(from: gateway)
         guard !host.isEmpty else { return }
@@ -234,8 +238,17 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
               let destinationIP = Self.parseRouteField("destination", from: hostRoute.stdout) else {
             return
         }
-        let currentGateway = Self.parseRouteField("gateway", from: hostRoute.stdout) ?? "?"
 
+        // Critical safety guard: only delete when destination is a concrete
+        // IPv4 address. If it's "default" (or any other non-IP literal) we
+        // hit fall-through to the default route and deleting would kill the
+        // box's entire network.
+        guard Self.isConcreteIPv4(destinationIP) else {
+            AppLogger.shared.info("pre-connect: no dedicated host route for \(host) (got destination=\(destinationIP)) — skipping flush")
+            return
+        }
+
+        let currentGateway = Self.parseRouteField("gateway", from: hostRoute.stdout) ?? "?"
         AppLogger.shared.info("pre-connect: flushing cached route to \(destinationIP) (was via \(currentGateway))")
 
         let result = (try? processRunner.run(
@@ -245,6 +258,18 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
         if !result.succeeded {
             AppLogger.shared.error("pre-connect route flush failed (sudoers may be missing /sbin/route — re-run install-deps.sh): \(result.stderr)")
+        }
+    }
+
+    /// Strict dotted-quad IPv4 check (0-255 per octet). Used as a safety gate
+    /// so `route get` fall-through sentinels like "default" never reach the
+    /// delete path.
+    private static func isConcreteIPv4(_ s: String) -> Bool {
+        let parts = s.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            guard let n = Int(part), n >= 0, n <= 255 else { return false }
+            return true
         }
     }
 

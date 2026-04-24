@@ -6,6 +6,26 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.5</title>
+      <sparkle:version>7</sparkle:version>
+      <sparkle:shortVersionString>0.2.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Hotfix — strongly recommended for v0.2.3 / v0.2.4 users.</strong></p>
+        <ul>
+          <li>Fixed a case where a failed openconnect handshake could leave a zombie child behind, with vpnc-script's DNS and route mutations applied but never reverted — symptom: "WiFi connected but nothing has network access" until the user quit the app. connect() now always SIGTERMs any residual child on failure so vpnc-script's disconnect phase runs and restores DNS/routes.</li>
+          <li>Pre-connect route flush now only deletes when the kernel returns a concrete IPv4 destination. Previously, when no dedicated host route existed, `route get` fell through to the default route (destination="default") and the subsequent delete wiped the system default route.</li>
+        </ul>
+      ]]></description>
+      <pubDate>Fri, 24 Apr 2026 17:25:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.5/VPNMenuBar-0.2.5.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="TT2i8OAe43EVJVf4bO6bf/gftOEKEXW/DG9HmPRoU95TZaYxU1A+7Q8XW+woboWJaRCCAQwLSK+dYHnFXSRADQ=="
+        length="1784270"
+      />
+    </item>
+    <item>
       <title>Version 0.2.4</title>
       <sparkle:version>6</sparkle:version>
       <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
