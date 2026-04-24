@@ -210,46 +210,33 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         }
     }
 
-    // MARK: - stale host-route cleanup
+    // MARK: - pre-connect host-route cleanup
 
-    /// Inspect the kernel routing table for a host route to the VPN gateway
-    /// whose nexthop is no longer reachable (typical after switching WiFi
-    /// while openconnect was killed without running vpnc-script's disconnect
-    /// phase) and delete it. Best-effort and silent: any failure here just
-    /// lets openconnect proceed and surface its native error.
+    /// Unconditionally delete any cached host route to the VPN gateway before
+    /// spawning openconnect. Called at the top of `start()` — at that point no
+    /// active tunnel exists, so deleting is always safe: if the route was
+    /// correct the kernel rebuilds it on the next packet via the default
+    /// gateway; if it was stale (left over from a different network after a
+    /// SIGKILL/WiFi-switch without disconnect-phase), this is what unblocks
+    /// the connect. Best-effort — any failure is logged and openconnect
+    /// proceeds to surface its native error.
     private func cleanupStaleHostRoute(forGateway gateway: String) {
         let host = Self.extractHost(from: gateway)
         guard !host.isEmpty else { return }
 
-        // Current default route's nexthop — what a freshly-added host route
-        // *should* point at on this network.
-        let defaultRoute = (try? processRunner.run(
-            executable: "/sbin/route",
-            arguments: ["-n", "get", "default"],
-            timeoutSeconds: 2
-        )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
-        guard defaultRoute.succeeded,
-              let defaultGateway = Self.parseRouteField("gateway", from: defaultRoute.stdout) else {
-            return
-        }
-
-        // Existing route to the VPN host (does its own DNS resolution).
+        // Route lookup (does its own DNS resolution).
         let hostRoute = (try? processRunner.run(
             executable: "/sbin/route",
             arguments: ["-n", "get", host],
             timeoutSeconds: 2
         )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
         guard hostRoute.succeeded,
-              let routeGateway = Self.parseRouteField("gateway", from: hostRoute.stdout),
               let destinationIP = Self.parseRouteField("destination", from: hostRoute.stdout) else {
             return
         }
+        let currentGateway = Self.parseRouteField("gateway", from: hostRoute.stdout) ?? "?"
 
-        // If the route falls through to the current default gateway, it's
-        // already correct — touching it would break a healthy connection.
-        guard routeGateway != defaultGateway else { return }
-
-        AppLogger.shared.warn("stale host route to \(destinationIP) via \(routeGateway) detected (default gw \(defaultGateway)) — deleting")
+        AppLogger.shared.info("pre-connect: flushing cached route to \(destinationIP) (was via \(currentGateway))")
 
         let result = (try? processRunner.run(
             executable: "/usr/bin/sudo",
@@ -257,7 +244,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             timeoutSeconds: 3
         )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
         if !result.succeeded {
-            AppLogger.shared.error("route delete failed (sudoers may be missing /sbin/route — re-run install-deps.sh): \(result.stderr)")
+            AppLogger.shared.error("pre-connect route flush failed (sudoers may be missing /sbin/route — re-run install-deps.sh): \(result.stderr)")
         }
     }
 

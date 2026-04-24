@@ -6,6 +6,26 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.3</title>
+      <sparkle:version>5</sparkle:version>
+      <sparkle:shortVersionString>0.2.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <ul>
+          <li>Pre-connect route flush is now unconditional — fixes the case where a cached host route to the VPN gateway looks "correct" (matches the default gateway) but traffic still fails to route after a WiFi/network change</li>
+          <li>Previously the cleanup only deleted routes that looked obviously stale; now it always flushes before spawning openconnect, because at that moment no active tunnel exists and the kernel rebuilds the route on the next packet</li>
+          <li>Each connect attempt now logs the pre-connect flush result (route IP, previous gateway, delete success/failure) so "stuck" connections are diagnosable from the log</li>
+        </ul>
+      ]]></description>
+      <pubDate>Fri, 24 Apr 2026 17:05:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.3/VPNMenuBar-0.2.3.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="oxb55TSmBF/M0nCgr76OpA0n2/s1Qn2lH/iAwGFfzgnlieaYm4jDNNVKBWO80dB9iZFDRtyY6et1Rhyy2BBuDw=="
+        length="1773592"
+      />
+    </item>
+    <item>
       <title>Version 0.2.2</title>
       <sparkle:version>4</sparkle:version>
       <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
