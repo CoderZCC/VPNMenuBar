@@ -27,8 +27,12 @@ final class ConfigStore {
         guard fm.fileExists(atPath: configURL.path) else { return nil }
         let data = try Data(contentsOf: configURL)
         do {
-            return try JSONDecoder().decode(VPNConfig.self, from: data)
+            // Sanitize on the way out so legacy configs written before the
+            // whitespace-stripping was added still surface clean values to
+            // connect() without waiting for a user-initiated save.
+            return try JSONDecoder().decode(VPNConfig.self, from: data).sanitized()
         } catch {
+            AppLogger.shared.error("config decode failed (\(error)) — backing up broken file")
             try backupBrokenFile()
             return nil
         }
@@ -40,7 +44,7 @@ final class ConfigStore {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(config)
+        let data = try encoder.encode(config.sanitized())
 
         // Atomic write: temp file + rename.
         let tmpURL = configURL.appendingPathExtension("tmp")

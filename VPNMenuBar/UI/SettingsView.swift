@@ -39,6 +39,16 @@ struct SettingsView: View {
                     .onChange(of: launchAtLogin) { newValue in
                         LoginItemManager.isEnabledPreference = newValue
                     }
+                HStack {
+                    Text("Log file")
+                    Spacer()
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(
+                            AppLogger.shared.logFileURL.path,
+                            inFileViewerRootedAtPath: AppLogger.shared.logDirectory.path
+                        )
+                    }
+                }
             }
 
             Section {
@@ -79,6 +89,7 @@ struct SettingsView: View {
                 await controller.connect()
             }
         } catch {
+            AppLogger.shared.error("SettingsView save failed: \(error)")
             savedAlertTitle = "Save Failed"
             savedAlertMessage = "The config file may be read-only — check permissions under ~/Library/Application Support."
             showSavedAlert = true

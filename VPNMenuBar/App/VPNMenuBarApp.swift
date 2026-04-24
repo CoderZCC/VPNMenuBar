@@ -80,6 +80,8 @@ final class AppCoordinator: ObservableObject {
 
         Self.shared = self
 
+        AppCoordinator.logStartupBanner()
+
         // Republish controller's state changes so SwiftUI re-renders the MenuBarExtra label
         // (which reads coordinator.controller.state but is only observing coordinator).
         controller.objectWillChange
@@ -101,6 +103,15 @@ final class AppCoordinator: ObservableObject {
             self?.controller.startNetworkMonitoring()
             self?.showOnboardingIfNeeded()
         }
+    }
+
+    private static func logStartupBanner() {
+        let bundle = Bundle.main
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let arch = ArchDetector.current == .appleSilicon ? "arm64" : "x86_64"
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        AppLogger.shared.info("===== VPNMenuBar launch v\(version) (\(build)) arch=\(arch) os=\(os) bundle=\(bundle.bundlePath) =====")
     }
 
     private func requestNotificationPermission() {

@@ -60,6 +60,7 @@ final class VPNController: ObservableObject {
     /// drop it and let the auto-reconnect path bring it back on the new
     /// interface (which also runs cleanupStaleHostRoute — see Quirk #11).
     private func handleInterfaceChange() async {
+        AppLogger.shared.info("interface change detected (state=\(state))")
         guard case .connected = state else { return }
         await autoDisconnect()
         if shouldAutoReconnect {
@@ -68,6 +69,7 @@ final class VPNController: ObservableObject {
     }
 
     private func handleNetworkChange(reachable: Bool) async {
+        AppLogger.shared.info("network change: reachable=\(reachable) state=\(state) shouldAutoReconnect=\(shouldAutoReconnect)")
         if reachable {
             // Network came back — auto-reconnect if the user had previously been
             // intentionally connected (shouldAutoReconnect flag set).
@@ -87,17 +89,23 @@ final class VPNController: ObservableObject {
     // MARK: - Public API
 
     func connect() async {
+        AppLogger.shared.info("connect() invoked")
         guard let config = (try? configStore.load()), config.isConfigured else {
+            AppLogger.shared.warn("connect aborted — setup incomplete")
             state = .failed(reason: "Setup incomplete — open Settings to finish configuration.")
             return
         }
+        AppLogger.shared.info("config loaded — user=\(config.username) gateway=\(config.gateway) openconnect=\(config.openconnectPath) skipDNS=\(config.skipDNSModification)")
 
         let checker = dependencyChecker
         let statuses = await Task.detached(priority: .userInitiated) {
             checker.check(config: config)
         }.value
         lastDependencyStatuses = statuses
+        let depsSummary = statuses.map { "\($0.id)=\($0.passed ? "ok" : "fail")" }.joined(separator: " ")
+        AppLogger.shared.info("dependency check: \(depsSummary)")
         if let failed = statuses.first(where: { !$0.passed }) {
+            AppLogger.shared.error("connect blocked — dependency \(failed.id) failed: \(failed.detail)")
             state = .failed(reason: "Dependency not ready: \(failed.detail)")
             return
         }
@@ -108,6 +116,7 @@ final class VPNController: ObservableObject {
         do {
             code = try TOTPGenerator.code(secret: config.totpSecret)
         } catch {
+            AppLogger.shared.error("TOTP generation failed: \(error)")
             state = .failed(reason: "Invalid TOTP secret — please check Settings.")
             return
         }
@@ -119,6 +128,7 @@ final class VPNController: ObservableObject {
                 try proc.start(config: config, password: password)
             }.value
         } catch {
+            AppLogger.shared.error("openconnect spawn failed: \(error)")
             state = .failed(reason: "Failed to launch openconnect. Verify the openconnect path in Settings → Advanced.")
             return
         }
@@ -126,10 +136,12 @@ final class VPNController: ObservableObject {
         let outcome = await openConnectProcess.waitForHandshake(timeout: handshakeTimeout)
         switch outcome {
         case .connected:
+            AppLogger.shared.info("handshake succeeded — VPN connected")
             state = .connected(since: Date())
             shouldAutoReconnect = true    // user is intentionally connected
             startMonitoring()
         case .failed(let reason):
+            AppLogger.shared.error("handshake failed: \(reason)")
             state = .failed(reason: reason)
             // Don't auto-reconnect on failed initial connects (wrong creds, missing deps).
         }
@@ -137,6 +149,7 @@ final class VPNController: ObservableObject {
 
     /// User-initiated disconnect. Clears the auto-reconnect intent.
     func disconnect() async {
+        AppLogger.shared.info("disconnect() invoked by user")
         shouldAutoReconnect = false
         await performDisconnect()
     }
@@ -144,6 +157,7 @@ final class VPNController: ObservableObject {
     /// System-initiated disconnect (e.g. network loss). Preserves the auto-reconnect
     /// intent so we can resume when the network comes back.
     private func autoDisconnect() async {
+        AppLogger.shared.warn("autoDisconnect triggered (network change / interface switch)")
         await performDisconnect()
     }
 
@@ -191,6 +205,7 @@ final class VPNController: ObservableObject {
                 let stillRunning = self.openConnectProcess.isRunning()
                 await MainActor.run {
                     if !stillRunning, case .connected = self.state {
+                        AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected")
                         self.state = .disconnected
                         Self.postUnexpectedDisconnectNotification()
                     }

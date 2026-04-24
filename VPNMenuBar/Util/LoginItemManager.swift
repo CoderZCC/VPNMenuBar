@@ -43,7 +43,7 @@ enum LoginItemManager {
                 }
             }
         } catch {
-            NSLog("LoginItemManager.applyToSystem(\(enabled)) failed: \(error)")
+            AppLogger.shared.error("LoginItemManager.applyToSystem(\(enabled)) failed: \(error)")
         }
     }
 }

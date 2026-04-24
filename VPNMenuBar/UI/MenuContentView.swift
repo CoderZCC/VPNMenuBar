@@ -42,6 +42,14 @@ struct MenuContentView: View {
 
         Button("Check Dependencies…") { onCheckDependencies() }
 
+        Button("Show Logs…") {
+            let url = AppLogger.shared.logDirectory
+            NSWorkspace.shared.selectFile(
+                AppLogger.shared.logFileURL.path,
+                inFileViewerRootedAtPath: url.path
+            )
+        }
+
         Button("Check for Updates…") {
             updaterController.checkForUpdates(nil)
         }

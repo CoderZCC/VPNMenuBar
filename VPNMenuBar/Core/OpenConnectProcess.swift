@@ -77,6 +77,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         p.standardError = stderrPipe
 
         try p.run()
+        AppLogger.shared.info("openconnect spawned, argv: \((p.arguments ?? []).joined(separator: " "))")
         stdinPipe.fileHandleForWriting.write((password + "\n").data(using: .utf8) ?? Data())
         try? stdinPipe.fileHandleForWriting.close()
 
@@ -123,12 +124,14 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             // Explicit failure keywords — return immediately.
             for marker in failureMarkers where stderrText.contains(marker) {
                 let reason = mapFailureMarker(marker, fullStderr: stderrText)
+                dumpStderrForDiagnosis(stderrText, context: "matched marker \"\(marker)\"")
                 return .failed(reason: reason)
             }
 
             // Process already exited during handshake phase → failure.
             if !p.isRunning {
                 let reason = tailOfStderr(stderrText, bytes: 200)
+                dumpStderrForDiagnosis(stderrText, context: "openconnect exited during handshake")
                 return .failed(reason: reason.isEmpty ? "openconnect exited before handshake" : reason)
             }
 
@@ -147,6 +150,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             String(data: collectedStderr, encoding: .utf8) ?? ""
         }
         let reason = tailOfStderr(stderrText, bytes: 200)
+        dumpStderrForDiagnosis(stderrText, context: "handshake timeout")
         return .failed(reason: reason.isEmpty ? "Handshake timeout" : reason)
     }
 
@@ -172,6 +176,19 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             timeoutSeconds: 2
         )
         return result?.succeeded ?? false
+    }
+
+    /// Dump the full captured openconnect stderr to the system log so the
+    /// user can inspect the raw output (e.g. the actual server pin-sha256,
+    /// cert subject/issuer) via Console.app — the UI reason string is kept
+    /// short on purpose.
+    private func dumpStderrForDiagnosis(_ stderrText: String, context: String) {
+        let trimmed = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            AppLogger.shared.error("openconnect failed (\(context)), stderr was empty")
+            return
+        }
+        AppLogger.shared.error("openconnect failed (\(context)). Full stderr:\n\(trimmed)")
     }
 
     private func tailOfStderr(_ text: String, bytes: Int) -> String {
@@ -232,8 +249,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         // already correct — touching it would break a healthy connection.
         guard routeGateway != defaultGateway else { return }
 
-        NSLog("VPNMenuBar: stale host route to %@ via %@ detected (default gw %@) — deleting",
-              destinationIP, routeGateway, defaultGateway)
+        AppLogger.shared.warn("stale host route to \(destinationIP) via \(routeGateway) detected (default gw \(defaultGateway)) — deleting")
 
         let result = (try? processRunner.run(
             executable: "/usr/bin/sudo",
@@ -241,8 +257,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             timeoutSeconds: 3
         )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
         if !result.succeeded {
-            NSLog("VPNMenuBar: route delete failed (sudoers may be missing /sbin/route — re-run install-deps.sh): %@",
-                  result.stderr)
+            AppLogger.shared.error("route delete failed (sudoers may be missing /sbin/route — re-run install-deps.sh): \(result.stderr)")
         }
     }
 

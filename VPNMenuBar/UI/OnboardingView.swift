@@ -155,7 +155,7 @@ struct OnboardingView: View {
             try configStore.save(config)
             step = 4
         } catch {
-            NSLog("OnboardingView save failed: \(error)")
+            AppLogger.shared.error("OnboardingView save failed: \(error)")
         }
     }
 
