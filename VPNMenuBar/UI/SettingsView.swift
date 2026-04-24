@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var config: VPNConfig = VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
     @State private var originalConfig: VPNConfig = VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
     @State private var launchAtLogin: Bool = LoginItemManager.isEnabledPreference
+    @State private var autoConnectOnLaunch: Bool = AutoConnectPreference.isEnabled
     @State private var showSavedAlert: Bool = false
     @State private var savedAlertTitle: String = ""
     @State private var savedAlertMessage: String = ""
@@ -38,6 +39,10 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { newValue in
                         LoginItemManager.isEnabledPreference = newValue
+                    }
+                Toggle("Auto-connect on launch", isOn: $autoConnectOnLaunch)
+                    .onChange(of: autoConnectOnLaunch) { newValue in
+                        AutoConnectPreference.isEnabled = newValue
                     }
                 HStack {
                     Text("Log file")

@@ -102,6 +102,26 @@ final class AppCoordinator: ObservableObject {
             LoginItemManager.applyPreference()
             self?.controller.startNetworkMonitoring()
             self?.showOnboardingIfNeeded()
+            self?.scheduleAutoConnectIfNeeded()
+        }
+    }
+
+    /// Kicks off a delayed `controller.connect()` when the user has opted into
+    /// auto-connect-on-launch AND setup is already complete. Success flips
+    /// `shouldAutoReconnect` inside the controller, so later network drops
+    /// auto-recover through the existing reachability path.
+    private func scheduleAutoConnectIfNeeded() {
+        guard AutoConnectPreference.isEnabled, configStore.isConfigured else { return }
+        AppLogger.shared.info("auto-connect on launch scheduled (5s delay)")
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+            guard let self else { return }
+            guard case .disconnected = self.controller.state else {
+                AppLogger.shared.info("auto-connect skipped — state=\(self.controller.state)")
+                return
+            }
+            AppLogger.shared.info("auto-connect firing")
+            await self.controller.connect()
         }
     }
 
