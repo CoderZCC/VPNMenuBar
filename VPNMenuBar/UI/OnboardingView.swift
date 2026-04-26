@@ -145,7 +145,10 @@ struct OnboardingView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(!config.isConfigured)
         default:
-            Button("Done") { onFinished() }
+            Button("Done") {
+                onFinished()
+                Task { await controller.connect() }
+            }
                 .keyboardShortcut(.defaultAction)
         }
     }
