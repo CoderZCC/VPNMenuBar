@@ -6,6 +6,27 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.10</title>
+      <sparkle:version>12</sparkle:version>
+      <sparkle:shortVersionString>0.2.10</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Fixes authentication against gateways that only accept the official Cisco client.</strong></p>
+        <ul>
+          <li>The app now identifies itself as <code>AnyConnect Windows 4.10.06079</code>. Some gateways serve openconnect's own User-Agent an HTTP Basic challenge instead of the OTP form, so the OTP step always failed with 401 — while the official Cisco client on the same machine connected fine. Configurable under Settings &rarr; Advanced &rarr; User-Agent; leave it empty to send openconnect's default</li>
+          <li>Fixed v0.2.9's diagnostic logging, which never worked: <code>openconnect -v</code> writes its HTTP trace to stdout, and the app was discarding stdout. The log now records the real HTTP status instead of only openconnect's misleading fallback message about Basic authentication</li>
+          <li>Failure messages in the menu no longer get buried under raw HTTP headers</li>
+        </ul>
+      ]]></description>
+      <pubDate>Mon, 03 Aug 2026 15:50:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.10/VPNMenuBar-0.2.10.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="Ux+BgZG40ZkcUg4i0k+N2IVdWZDztWBv5aT/asDYhI+OdyNlzxDkqkbljM9NChSi7/smsSAIZ/7Rbj6bSIfWCw=="
+        length="1820061"
+      />
+    </item>
+    <item>
       <title>Version 0.2.9</title>
       <sparkle:version>11</sparkle:version>
       <sparkle:shortVersionString>0.2.9</sparkle:shortVersionString>

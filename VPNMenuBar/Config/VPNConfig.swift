@@ -20,6 +20,22 @@ struct VPNConfig: Codable, Equatable {
     // existed still decode (nil == false).
     var otpSentSeparately: Bool? = nil
 
+    // Some gateways route clients by User-Agent: openconnect's own
+    // "Open AnyConnect VPN Agent v9.x" gets served an HTTP Basic challenge
+    // instead of the OTP form, so the second auth step always fails with 401
+    // while the official Cisco client — which sends the string below — works.
+    // Optional so pre-existing configs pick up the default on upgrade; empty
+    // string means "send openconnect's own UA".
+    var userAgent: String? = nil
+
+    static let defaultUserAgent = "AnyConnect Windows 4.10.06079"
+
+    /// The UA to actually pass to openconnect, or nil to leave it alone.
+    var effectiveUserAgent: String? {
+        guard let ua = userAgent else { return VPNConfig.defaultUserAgent }
+        return ua.isEmpty ? nil : ua
+    }
+
     // Meta
     var schemaVersion: Int = 1
 
@@ -40,6 +56,7 @@ struct VPNConfig: Codable, Equatable {
         copy.serverCertPin = VPNConfig.cleanField(serverCertPin)
         copy.openconnectPath = VPNConfig.cleanField(openconnectPath)
         copy.vpncScriptPath = VPNConfig.cleanField(vpncScriptPath)
+        copy.userAgent = userAgent.map { VPNConfig.cleanField($0) }
         return copy
     }
 

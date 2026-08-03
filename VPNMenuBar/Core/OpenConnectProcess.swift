@@ -77,6 +77,10 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        var userAgentArgs: [String] = []
+        if let ua = config.effectiveUserAgent {
+            userAgentArgs = ["--useragent", ua]
+        }
         p.arguments = [
             "-n",
             config.openconnectPath,
@@ -89,13 +93,17 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             "--user", config.username,
             "--passwd-on-stdin",
             "--servercert", config.serverCertPin,
+        ] + userAgentArgs + [
             config.gateway,
         ]
 
         let stdinPipe = Pipe()
         let stderrPipe = Pipe()
         p.standardInput = stdinPipe
-        p.standardOutput = FileHandle.nullDevice
+        // openconnect writes its -v HTTP trace to stdout, not stderr. Both are
+        // merged into one pipe so the trace is captured alongside the error
+        // line it explains; discarding stdout made -v useless in v0.2.9.
+        p.standardOutput = stderrPipe
         p.standardError = stderrPipe
 
         try p.run()
@@ -158,7 +166,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
 
             // Process already exited during handshake phase → failure.
             if !p.isRunning {
-                let reason = tailOfStderr(stderrText, bytes: 200)
+                let reason = meaningfulTail(stderrText)
                 dumpStderrForDiagnosis(stderrText, context: "openconnect exited during handshake")
                 return .failed(reason: reason.isEmpty ? "openconnect exited before handshake" : reason)
             }
@@ -177,7 +185,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         let stderrText = stderrQueue.sync {
             String(data: collectedStderr, encoding: .utf8) ?? ""
         }
-        let reason = tailOfStderr(stderrText, bytes: 200)
+        let reason = meaningfulTail(stderrText)
         dumpStderrForDiagnosis(stderrText, context: "handshake timeout")
         return .failed(reason: reason.isEmpty ? "Handshake timeout" : reason)
     }
@@ -242,6 +250,26 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
                 return String(line[...equals]) + "<redacted>"
             }
             .joined(separator: "\n")
+    }
+
+    /// Lines that -v adds to the raw HTTP trace. They carry the diagnosis in the
+    /// log file but would bury the human-readable error in the menu's status row.
+    private static let tracePrefixes = [
+        "POST ", "GET ", "Got HTTP response", "HTTP body length", "Set-Cookie",
+        "Cookie:", "Content-", "X-", "Attempting to connect", "Connected to",
+        "SSL negotiation", "XML POST", "OK to generate", "Generating ",
+        "Connection: ", "Transfer-Encoding",
+    ]
+
+    /// Last few non-trace lines — what the user actually sees as the reason.
+    private func meaningfulTail(_ text: String, maxLines: Int = 3) -> String {
+        let lines = text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { line in
+                !line.isEmpty && !Self.tracePrefixes.contains { line.hasPrefix($0) }
+            }
+        return lines.suffix(maxLines).joined(separator: "\n")
     }
 
     private func tailOfStderr(_ text: String, bytes: Int) -> String {

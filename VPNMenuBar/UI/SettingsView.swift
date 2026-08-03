@@ -36,6 +36,13 @@ struct SettingsView: View {
             Section("Advanced") {
                 TextField("openconnect path", text: $config.openconnectPath)
                 TextField("vpnc-script path", text: $config.vpncScriptPath)
+                TextField("User-Agent", text: Binding(
+                    get: { config.userAgent ?? VPNConfig.defaultUserAgent },
+                    set: { config.userAgent = $0 }
+                ))
+                Text("Some gateways only serve the OTP form to the official Cisco client and reject openconnect's own User-Agent with a 401. Leave empty to send openconnect's default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Skip DNS modification (use bundled vpnc-script--no-dns)",
                        isOn: $config.skipDNSModification)
             }

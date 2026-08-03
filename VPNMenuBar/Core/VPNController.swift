@@ -117,7 +117,7 @@ final class VPNController: ObservableObject {
         // otpSeparate + secret lengths are logged because a stdin/auth-form
         // mismatch is indistinguishable from a protocol error in openconnect's
         // stderr — never log the values themselves.
-        AppLogger.shared.info("config loaded — user=\(config.username) gateway=\(config.gateway) openconnect=\(config.openconnectPath) skipDNS=\(config.skipDNSModification) otpSeparate=\(config.otpSentSeparately ?? false) pwdPrefixLen=\(config.passwordPrefix.count) totpSecretLen=\(config.totpSecret.count)")
+        AppLogger.shared.info("config loaded — user=\(config.username) gateway=\(config.gateway) openconnect=\(config.openconnectPath) skipDNS=\(config.skipDNSModification) otpSeparate=\(config.otpSentSeparately ?? false) pwdPrefixLen=\(config.passwordPrefix.count) totpSecretLen=\(config.totpSecret.count) userAgent=\(config.effectiveUserAgent ?? "<openconnect default>")")
 
         let checker = dependencyChecker
         let statuses = await Task.detached(priority: .userInitiated) {
