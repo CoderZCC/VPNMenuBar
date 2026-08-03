@@ -6,49 +6,25 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
-      <title>Version 0.2.10</title>
-      <sparkle:version>12</sparkle:version>
-      <sparkle:shortVersionString>0.2.10</sparkle:shortVersionString>
+      <title>Version 0.2.11</title>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
       <description><![CDATA[
         <p><strong>Fixes authentication against gateways that only accept the official Cisco client.</strong></p>
         <ul>
-          <li>The app now identifies itself as <code>AnyConnect Windows 4.10.06079</code>. Some gateways serve openconnect's own User-Agent an HTTP Basic challenge instead of the OTP form, so the OTP step always failed with 401 — while the official Cisco client on the same machine connected fine. Configurable under Settings &rarr; Advanced &rarr; User-Agent; leave it empty to send openconnect's default</li>
-          <li>Fixed v0.2.9's diagnostic logging, which never worked: <code>openconnect -v</code> writes its HTTP trace to stdout, and the app was discarding stdout. The log now records the real HTTP status instead of only openconnect's misleading fallback message about Basic authentication</li>
-          <li>Failure messages in the menu no longer get buried under raw HTTP headers</li>
+          <li>The app now identifies itself as <code>AnyConnect Windows 4.10.06079</code>. Some gateways serve openconnect's own User-Agent an HTTP Basic challenge instead of the OTP form, so the OTP step always failed with 401 — while the official Cisco client on the same machine connected fine. Existing installs pick this up automatically; configurable under Settings &rarr; Advanced &rarr; User-Agent, leave empty to send openconnect's default</li>
+          <li>Connect attempts are now rate-limited: after 3 consecutive failures the app waits 5 minutes before retrying, so repeated failures don't get your IP banned by the gateway</li>
+          <li>Failure logs now record the real HTTP status instead of only openconnect's misleading fallback message about Basic authentication. Session cookies are redacted</li>
+          <li>The connect log records the two-step setting, credential field lengths, handshake duration, the generated TOTP code and the local clock offset, so an authentication failure can be diagnosed from the log alone</li>
         </ul>
       ]]></description>
-      <pubDate>Mon, 03 Aug 2026 15:50:00 +0800</pubDate>
+      <pubDate>Mon, 03 Aug 2026 16:05:00 +0800</pubDate>
       <enclosure
-        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.10/VPNMenuBar-0.2.10.zip"
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.11/VPNMenuBar-0.2.11.zip"
         type="application/octet-stream"
-        sparkle:edSignature="Ux+BgZG40ZkcUg4i0k+N2IVdWZDztWBv5aT/asDYhI+OdyNlzxDkqkbljM9NChSi7/smsSAIZ/7Rbj6bSIfWCw=="
-        length="1820061"
-      />
-    </item>
-    <item>
-      <title>Version 0.2.9</title>
-      <sparkle:version>11</sparkle:version>
-      <sparkle:shortVersionString>0.2.9</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[
-        <p><strong>Diagnostic release.</strong> It does not fix a known bug — it makes an unexplained authentication failure diagnosable.</p>
-        <ul>
-          <li>Connect attempts are now rate-limited: after 3 consecutive failures the app refuses to retry for 5 minutes. Repeated failed logins get your IP banned by the gateway's fail2ban for ~10 minutes, and that ban shows up as a confusing mid-handshake TLS reset</li>
-          <li>openconnect now runs with <code>-v</code>, so the log records the real HTTP status (e.g. <code>401 Authentication failed</code>) instead of only its misleading fallback message about Basic authentication being disabled</li>
-          <li>Session cookies exposed by <code>-v</code> are redacted before anything is written to the log</li>
-          <li>On failure the app queries an NTP server and logs the local clock offset — a Mac whose clock has drifted generates TOTP codes the gateway rejects</li>
-          <li>The connect log now records whether two-step mode is on, how many lines were fed to openconnect, and the handshake duration</li>
-          <li>A TOTP code is not generated when its 30-second window has under 8 seconds left</li>
-          <li><strong>Privacy change:</strong> the generated 6-digit TOTP code is now written to the log so it can be compared against your authenticator app. This reverses the v0.2.2 promise that the code is never logged. The code expires in under 30 seconds; the TOTP secret itself is still never logged</li>
-        </ul>
-      ]]></description>
-      <pubDate>Mon, 03 Aug 2026 15:30:00 +0800</pubDate>
-      <enclosure
-        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.9/VPNMenuBar-0.2.9.zip"
-        type="application/octet-stream"
-        sparkle:edSignature="Ozz3eisO2vrGl7qYhwpIbDRXxvDF0Sqw/49tGnJHqt4G4d2vPHIyeVI5vvmXoJUT5Yh8BVjxXgo13Y/X9fG3Aw=="
-        length="1813899"
+        sparkle:edSignature="jlTJchENh0hhCtsr3RmsBcbFpuJOLJjtOHcRms7t3pK/+yV9+kG0rspqCSUENLvH8ZHOmvRZ2FiwENQOOX83Dw=="
+        length="1819549"
       />
     </item>
     <item>
