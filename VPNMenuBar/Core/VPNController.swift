@@ -25,6 +25,18 @@ final class VPNController: ObservableObject {
     private var consecutiveFailures = 0
     private var cooldownUntil: Date?
 
+    /// connect() is @MainActor but suspends several times (dependency probe,
+    /// TOTP wait, handshake). Two callers — say an auto-reconnect racing a menu
+    /// click — would otherwise interleave through those suspension points and
+    /// each spawn an openconnect, and `state = .connecting` is set too late to
+    /// stop it. Worse, both mint the same TOTP code: the gateway accepts it once
+    /// and rejects the replay with a 401 that looks exactly like a bad OTP.
+    private var connectInFlight = false
+
+    /// TOTP step already handed to the gateway. A code is single-use — reusing
+    /// one inside its 30s window gets a 401 for replay, not for being wrong.
+    private var lastSubmittedTOTPCounter: UInt64?
+
     private let handshakeTimeout: TimeInterval
     private let pollInterval: TimeInterval
     private var monitorTask: Task<Void, Never>?
@@ -103,6 +115,15 @@ final class VPNController: ObservableObject {
 
     func connect() async {
         AppLogger.shared.info("connect() invoked")
+        // No await between the check and the set — on the main actor that makes
+        // this a real mutex, not a check-then-act race.
+        guard !connectInFlight else {
+            AppLogger.shared.warn("connect ignored — an attempt is already in flight")
+            return
+        }
+        connectInFlight = true
+        defer { connectInFlight = false }
+
         if let until = cooldownUntil, Date() < until {
             let wait = Int(until.timeIntervalSinceNow.rounded(.up))
             AppLogger.shared.warn("connect blocked — cooldown active for another \(wait)s after \(consecutiveFailures) failures")
@@ -137,12 +158,16 @@ final class VPNController: ObservableObject {
 
         state = .connecting
 
-        // Don't mint a code that is about to expire — see
-        // TOTPGenerator.secondsRemainingInStep. Waiting out the tail costs at
-        // most `minTOTPValidity` seconds and is invisible next to the handshake.
+        // Wait out the current TOTP step when it is nearly over (the code could
+        // expire in flight) or when we already submitted it (the gateway treats
+        // a reused code as a replay and answers 401, which is indistinguishable
+        // from a wrong OTP). Costs at most one step.
         let remaining = TOTPGenerator.secondsRemainingInStep()
-        if remaining < Self.minTOTPValidity {
-            AppLogger.shared.info("TOTP step has \(remaining)s left — waiting for the next one")
+        let currentCounter = UInt64(Date().timeIntervalSince1970 / TOTPGenerator.step)
+        let alreadySubmitted = lastSubmittedTOTPCounter == currentCounter
+        if alreadySubmitted || remaining < Self.minTOTPValidity {
+            let why = alreadySubmitted ? "code \(currentCounter) was already submitted" : "only \(remaining)s left"
+            AppLogger.shared.info("waiting \(remaining)s for the next TOTP step — \(why)")
             try? await Task.sleep(nanoseconds: UInt64(remaining) * 1_000_000_000 + 200_000_000)
         }
 
@@ -159,7 +184,9 @@ final class VPNController: ObservableObject {
         // secret apart from a server-side rejection. It expires in <30s, and
         // the secret that produced it is never logged.
         let now = Date()
-        AppLogger.shared.info("TOTP generated: code=\(code) counter=\(UInt64(now.timeIntervalSince1970 / TOTPGenerator.step)) unixTime=\(UInt64(now.timeIntervalSince1970)) validFor=\(TOTPGenerator.secondsRemainingInStep(at: now))s localTime=\(now)")
+        let counter = UInt64(now.timeIntervalSince1970 / TOTPGenerator.step)
+        lastSubmittedTOTPCounter = counter
+        AppLogger.shared.info("TOTP generated: code=\(code) counter=\(counter) unixTime=\(UInt64(now.timeIntervalSince1970)) validFor=\(TOTPGenerator.secondsRemainingInStep(at: now))s localTime=\(now)")
         // Two-step gateways expect the OTP as a second stdin line (see
         // VPNConfig.otpSentSeparately); classic gateways expect one
         // concatenated password.

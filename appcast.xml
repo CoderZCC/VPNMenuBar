@@ -6,6 +6,26 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.14</title>
+      <sparkle:version>16</sparkle:version>
+      <sparkle:shortVersionString>0.2.14</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Fixes a self-inflicted login failure after disconnecting.</strong></p>
+        <ul>
+          <li>Two connection attempts could start at once — typically an auto-reconnect racing a menu click — and both would generate the <em>same</em> one-time code. The gateway accepts it once and rejects the second as a replay with a 401 that looks exactly like a wrong OTP. Retrying inside the same 30-second window hit the same wall, and three failures then triggered the 5-minute cooldown. Connect attempts are now mutually exclusive</li>
+          <li>A one-time code that has already been submitted is never reused; the app waits for the next 30-second step instead</li>
+        </ul>
+      ]]></description>
+      <pubDate>Mon, 03 Aug 2026 17:25:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.14/VPNMenuBar-0.2.14.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="XUMhbph+zAL7a/wTkgN+ow/OQ/6xrB2pJqaNK6l0h7AvLcpQyCvRU6ZU4DL0YnYyz49Ufxc5GFXS83NU9c1iAw=="
+        length="1852485"
+      />
+    </item>
+    <item>
       <title>Version 0.2.13</title>
       <sparkle:version>15</sparkle:version>
       <sparkle:shortVersionString>0.2.13</sparkle:shortVersionString>
