@@ -247,9 +247,9 @@ iOS 相机自带 QR 码识别,打开相机对准 QR 码,屏幕顶部会弹出一
 
 **app 内置自动处理** —— 每次点 Connect 之前会先扫一遍路由表，发现脏路由自动 `sudo route delete` 掉再连。如果你还见到这个错：
 
-1. 先确认 sudoers 已经包含 `/sbin/route`：
+1. 先确认 sudoers 已经包含 `/sbin/route`（文件名里用户名中的 `.` 会被替换成 `_`，所以用通配符最稳妥）：
    ```sh
-   sudo cat /etc/sudoers.d/vpnmenubar-$(whoami)
+   sudo cat /etc/sudoers.d/vpnmenubar-*
    ```
    末尾那行应该是 `..., /usr/bin/pkill -x openconnect, /sbin/route`。如果没有 `/sbin/route`，**重跑一次** Onboarding 里 sudoers 那行的 **Configure sudo permissions** 按钮（或者 `bash install-deps.sh`，脚本检测到旧规则会自动覆盖）。
 2. 还不行的话，手动删一下脏路由验证一下（把 `&lt;你的VPN域名&gt;` 换成你 Settings 里填的 gateway）：
@@ -277,9 +277,9 @@ rm -rf ~/Library/Application\ Support/com.example.vpnmenubar
 # 删除偏好设置
 rm -f ~/Library/Preferences/com.example.vpnmenubar.plist
 
-# 取消 visudo 那行（可选）
-sudo visudo
-# 删掉那行 VPNMenuBar 相关的 NOPASSWD 规则
+# 删除 sudoers 免密规则（可选）
+# 规则单独放在一个文件里，直接删文件即可（文件名里用户名的 . 会被写成 _，用通配符匹配）
+ls /etc/sudoers.d/vpnmenubar-* && sudo rm /etc/sudoers.d/vpnmenubar-*
 ```
 
 ### Q4. 状态栏图标不见了？

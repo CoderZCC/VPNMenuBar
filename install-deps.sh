@@ -12,6 +12,8 @@
 #        will download Xcode Command Line Tools and prompt for sudo password)
 #     4. Installs openconnect via Homebrew (idempotent)
 #     5. Writes a sudoers NOPASSWD rule to /etc/sudoers.d/vpnmenubar-<user>
+#        (the <user> part is sanitized — dots become '_' — because sudo ignores
+#        sudoers.d files whose names contain a '.', e.g. AD names like first.last)
 #        (prompts for login password once if not already cached)
 #        Grants passwordless sudo for: openconnect, pkill -x openconnect,
 #        and /sbin/route (used to scrub stale host routes after WiFi switch)
@@ -19,8 +21,8 @@
 #
 # Safe to re-run: every step is idempotent.
 #
-# To uninstall the sudoers rule later:
-#     sudo rm /etc/sudoers.d/vpnmenubar-$(whoami)
+# To uninstall the sudoers rule later (print the exact path first):
+#     ls /etc/sudoers.d/vpnmenubar-* && sudo rm /etc/sudoers.d/vpnmenubar-*
 
 set -e
 
@@ -132,7 +134,14 @@ fi
 # ---------- 5. sudoers NOPASSWD rule ----------
 step "Step 5/5 · 配置 sudoers 免密规则"
 USER_NAME=$(whoami)
-SUDOERS_FILE="/etc/sudoers.d/vpnmenubar-$USER_NAME"
+# sudo SILENTLY IGNORES files in /etc/sudoers.d whose names contain a '.' (or
+# end in '~') — see sudoers(5). An AD-style username like "first.last" would
+# otherwise produce a rule that never takes effect. Sanitize any char outside
+# [A-Za-z0-9_-] to '_' for the FILENAME only; the username inside the rule
+# keeps its original form, where dots are valid.
+SAFE_NAME=$(printf '%s' "$USER_NAME" | tr -c 'A-Za-z0-9_-' '_')
+SUDOERS_FILE="/etc/sudoers.d/vpnmenubar-$SAFE_NAME"
+LEGACY_FILE="/etc/sudoers.d/vpnmenubar-$USER_NAME"
 SUDOERS_LINE="$USER_NAME ALL=(root) NOPASSWD: $OPENCONNECT, /usr/bin/pkill -x openconnect, /sbin/route"
 
 # Idempotency check: does sudo -n already work for BOTH openconnect AND
@@ -172,6 +181,12 @@ else
     fi
 
     ok "已写入 $SUDOERS_FILE"
+
+    # A rule written by an older version under the dotted name was being
+    # ignored by sudo anyway — clean it up.
+    if [ "$LEGACY_FILE" != "$SUDOERS_FILE" ] && [ -f "$LEGACY_FILE" ]; then
+        sudo rm -f "$LEGACY_FILE" && info "已清理旧的被忽略文件 $LEGACY_FILE"
+    fi
 
     # Verify it actually took effect (both openconnect and route entries)
     if sudo -n "$OPENCONNECT" --version >/dev/null 2>&1 \
