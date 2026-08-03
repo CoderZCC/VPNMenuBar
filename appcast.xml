@@ -6,6 +6,31 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.9</title>
+      <sparkle:version>11</sparkle:version>
+      <sparkle:shortVersionString>0.2.9</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Diagnostic release.</strong> It does not fix a known bug — it makes an unexplained authentication failure diagnosable.</p>
+        <ul>
+          <li>Connect attempts are now rate-limited: after 3 consecutive failures the app refuses to retry for 5 minutes. Repeated failed logins get your IP banned by the gateway's fail2ban for ~10 minutes, and that ban shows up as a confusing mid-handshake TLS reset</li>
+          <li>openconnect now runs with <code>-v</code>, so the log records the real HTTP status (e.g. <code>401 Authentication failed</code>) instead of only its misleading fallback message about Basic authentication being disabled</li>
+          <li>Session cookies exposed by <code>-v</code> are redacted before anything is written to the log</li>
+          <li>On failure the app queries an NTP server and logs the local clock offset — a Mac whose clock has drifted generates TOTP codes the gateway rejects</li>
+          <li>The connect log now records whether two-step mode is on, how many lines were fed to openconnect, and the handshake duration</li>
+          <li>A TOTP code is not generated when its 30-second window has under 8 seconds left</li>
+          <li><strong>Privacy change:</strong> the generated 6-digit TOTP code is now written to the log so it can be compared against your authenticator app. This reverses the v0.2.2 promise that the code is never logged. The code expires in under 30 seconds; the TOTP secret itself is still never logged</li>
+        </ul>
+      ]]></description>
+      <pubDate>Mon, 03 Aug 2026 15:30:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.9/VPNMenuBar-0.2.9.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="Ozz3eisO2vrGl7qYhwpIbDRXxvDF0Sqw/49tGnJHqt4G4d2vPHIyeVI5vvmXoJUT5Yh8BVjxXgo13Y/X9fG3Aw=="
+        length="1813899"
+      />
+    </item>
+    <item>
       <title>Version 0.2.8</title>
       <sparkle:version>10</sparkle:version>
       <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>

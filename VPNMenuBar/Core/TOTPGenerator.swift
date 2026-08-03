@@ -7,6 +7,19 @@ enum TOTPError: Error, Equatable {
 }
 
 enum TOTPGenerator {
+    static let step: TimeInterval = 30
+
+    /// Seconds left before the current 30s step rolls over.
+    ///
+    /// A code minted in the tail of its step can be rejected by the gateway:
+    /// the round trip (spawn openconnect → TLS → first auth form → second auth
+    /// form → POST) takes long enough that the server may already be validating
+    /// against the next step by the time the code arrives.
+    static func secondsRemainingInStep(at date: Date = Date()) -> Int {
+        let elapsed = date.timeIntervalSince1970.truncatingRemainder(dividingBy: step)
+        return Int((step - elapsed).rounded(.up))
+    }
+
     /// Compute the TOTP code for the given Base32-encoded secret at the given time.
     /// Follows RFC 6238 with HMAC-SHA1, 30s step, configurable digit count.
     static func code(secret: String, at date: Date = Date(), digits: Int = 6) throws -> String {

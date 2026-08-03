@@ -12,6 +12,19 @@ final class VPNController: ObservableObject {
     private let dependencyChecker: DependencyChecker
     private let openConnectProcess: OpenConnectProcessRunning
     private let networkMonitor: NetworkMonitoring
+    /// Minimum life a TOTP code must have left before we hand it to openconnect.
+    private static let minTOTPValidity = 8
+
+    /// ocserv runs fail2ban: a handful of failed auth attempts from one source
+    /// IP gets it banned for ~10 minutes, and the ban surfaces as a TLS reset
+    /// mid-handshake — an error that looks nothing like "you were rate limited".
+    /// Stop the user from digging that hole by clicking Connect repeatedly.
+    private static let failuresBeforeCooldown = 3
+    private static let cooldownSeconds: TimeInterval = 300
+
+    private var consecutiveFailures = 0
+    private var cooldownUntil: Date?
+
     private let handshakeTimeout: TimeInterval
     private let pollInterval: TimeInterval
     private var monitorTask: Task<Void, Never>?
@@ -90,12 +103,21 @@ final class VPNController: ObservableObject {
 
     func connect() async {
         AppLogger.shared.info("connect() invoked")
+        if let until = cooldownUntil, Date() < until {
+            let wait = Int(until.timeIntervalSinceNow.rounded(.up))
+            AppLogger.shared.warn("connect blocked — cooldown active for another \(wait)s after \(consecutiveFailures) failures")
+            state = .failed(reason: "Too many failed attempts. Waiting \(wait)s before retrying so the server doesn't ban this IP.")
+            return
+        }
         guard let config = (try? configStore.load()), config.isConfigured else {
             AppLogger.shared.warn("connect aborted — setup incomplete")
             state = .failed(reason: "Setup incomplete — open Settings to finish configuration.")
             return
         }
-        AppLogger.shared.info("config loaded — user=\(config.username) gateway=\(config.gateway) openconnect=\(config.openconnectPath) skipDNS=\(config.skipDNSModification)")
+        // otpSeparate + secret lengths are logged because a stdin/auth-form
+        // mismatch is indistinguishable from a protocol error in openconnect's
+        // stderr — never log the values themselves.
+        AppLogger.shared.info("config loaded — user=\(config.username) gateway=\(config.gateway) openconnect=\(config.openconnectPath) skipDNS=\(config.skipDNSModification) otpSeparate=\(config.otpSentSeparately ?? false) pwdPrefixLen=\(config.passwordPrefix.count) totpSecretLen=\(config.totpSecret.count)")
 
         let checker = dependencyChecker
         let statuses = await Task.detached(priority: .userInitiated) {
@@ -112,6 +134,15 @@ final class VPNController: ObservableObject {
 
         state = .connecting
 
+        // Don't mint a code that is about to expire — see
+        // TOTPGenerator.secondsRemainingInStep. Waiting out the tail costs at
+        // most `minTOTPValidity` seconds and is invisible next to the handshake.
+        let remaining = TOTPGenerator.secondsRemainingInStep()
+        if remaining < Self.minTOTPValidity {
+            AppLogger.shared.info("TOTP step has \(remaining)s left — waiting for the next one")
+            try? await Task.sleep(nanoseconds: UInt64(remaining) * 1_000_000_000 + 200_000_000)
+        }
+
         let code: String
         do {
             code = try TOTPGenerator.code(secret: config.totpSecret)
@@ -120,6 +151,12 @@ final class VPNController: ObservableObject {
             state = .failed(reason: "Invalid TOTP secret — please check Settings.")
             return
         }
+        // The code itself is logged on purpose: comparing it against the
+        // authenticator app at the same instant is the only way to tell a bad
+        // secret apart from a server-side rejection. It expires in <30s, and
+        // the secret that produced it is never logged.
+        let now = Date()
+        AppLogger.shared.info("TOTP generated: code=\(code) counter=\(UInt64(now.timeIntervalSince1970 / TOTPGenerator.step)) unixTime=\(UInt64(now.timeIntervalSince1970)) validFor=\(TOTPGenerator.secondsRemainingInStep(at: now))s localTime=\(now)")
         // Two-step gateways expect the OTP as a second stdin line (see
         // VPNConfig.otpSentSeparately); classic gateways expect one
         // concatenated password.
@@ -138,15 +175,28 @@ final class VPNController: ObservableObject {
             return
         }
 
+        let handshakeStart = Date()
         let outcome = await openConnectProcess.waitForHandshake(timeout: handshakeTimeout)
+        // Elapsed time tells apart "the code expired in flight" (would need to
+        // be seconds) from "the server rejected it outright" (milliseconds).
+        let elapsedMs = Int(Date().timeIntervalSince(handshakeStart) * 1000)
+        AppLogger.shared.info("handshake finished in \(elapsedMs)ms, TOTP had \(TOTPGenerator.secondsRemainingInStep())s left at completion")
         switch outcome {
         case .connected:
             AppLogger.shared.info("handshake succeeded — VPN connected")
+            consecutiveFailures = 0
+            cooldownUntil = nil
             state = .connected(since: Date())
             shouldAutoReconnect = true    // user is intentionally connected
             startMonitoring()
         case .failed(let reason):
             AppLogger.shared.error("handshake failed: \(reason)")
+            await logClockOffset()
+            consecutiveFailures += 1
+            if consecutiveFailures >= Self.failuresBeforeCooldown {
+                cooldownUntil = Date().addingTimeInterval(Self.cooldownSeconds)
+                AppLogger.shared.warn("\(consecutiveFailures) consecutive failures — cooling down \(Int(Self.cooldownSeconds))s to avoid a fail2ban lockout")
+            }
             // CRITICAL: on handshake failure openconnect may have left a
             // zombie child that already ran vpnc-script's connect phase
             // (DNS and route table mutated) without ever reaching the
@@ -162,6 +212,30 @@ final class VPNController: ObservableObject {
             state = .failed(reason: reason)
             // Don't auto-reconnect on failed initial connects (wrong creds, missing deps).
         }
+    }
+
+    /// Query an NTP server and log how far this Mac's clock has drifted.
+    ///
+    /// A TOTP code is derived from the local clock, so a machine that is more
+    /// than ~30s off generates codes the gateway rejects outright — which is
+    /// indistinguishable from a wrong secret in openconnect's output. Only run
+    /// on failure: it costs a network round trip. `sntp` needs no root as long
+    /// as we don't ask it to set the clock.
+    private func logClockOffset() async {
+        let result = await Task.detached(priority: .utility) { () -> ProcessResult? in
+            try? SystemProcessRunner().run(
+                executable: "/usr/bin/sntp",
+                arguments: ["-t", "3", "time.apple.com"],
+                timeoutSeconds: 5
+            )
+        }.value
+        // sntp writes the offset line to stdout on success but to stderr on
+        // lookup failure — keep both so a failed query is still diagnosable.
+        let text = [result?.stdout, result?.stderr]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " | ")
+        AppLogger.shared.info("clock offset check (sntp): \(text.isEmpty ? "<no output — query failed>" : text)")
     }
 
     /// User-initiated disconnect. Clears the auto-reconnect intent.

@@ -80,6 +80,11 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         p.arguments = [
             "-n",
             config.openconnectPath,
+            // Without -v the stderr only carries openconnect's last-resort
+            // message ("Basic authentication is disabled"), which hides the
+            // actual HTTP status that caused it. Cookies are scrubbed before
+            // anything reaches the log file — see redactSecrets.
+            "-v",
             "--script", scriptPath,
             "--user", config.username,
             "--passwd-on-stdin",
@@ -95,6 +100,10 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
 
         try p.run()
         AppLogger.shared.info("openconnect spawned, argv: \((p.arguments ?? []).joined(separator: " "))")
+        // A two-step gateway asks for a second auth form; if we fed it only one
+        // stdin line openconnect hits EOF and falls back to HTTP Basic, whose
+        // "basic auth disabled" error looks nothing like the real cause.
+        AppLogger.shared.info("writing \(password.split(separator: "\n", omittingEmptySubsequences: false).count) stdin line(s) to openconnect")
         stdinPipe.fileHandleForWriting.write((password + "\n").data(using: .utf8) ?? Data())
         try? stdinPipe.fileHandleForWriting.close()
 
@@ -214,7 +223,25 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             AppLogger.shared.error("openconnect failed (\(context)), stderr was empty")
             return
         }
-        AppLogger.shared.error("openconnect failed (\(context)). Full stderr:\n\(trimmed)")
+        AppLogger.shared.error("openconnect failed (\(context)). Full stderr:\n\(redactSecrets(trimmed))")
+    }
+
+    /// -v makes openconnect echo session cookies; those are bearer credentials
+    /// and must never reach the log file the user mails around for support.
+    private func redactSecrets(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                let lower = line.lowercased()
+                guard lower.hasPrefix("set-cookie:") || lower.hasPrefix("cookie:") else {
+                    return String(line)
+                }
+                guard let colon = line.firstIndex(of: ":"),
+                      let equals = line[line.index(after: colon)...].firstIndex(of: "=") else {
+                    return String(line[...(line.firstIndex(of: ":") ?? line.startIndex)]) + " <redacted>"
+                }
+                return String(line[...equals]) + "<redacted>"
+            }
+            .joined(separator: "\n")
     }
 
     private func tailOfStderr(_ text: String, bytes: Int) -> String {
