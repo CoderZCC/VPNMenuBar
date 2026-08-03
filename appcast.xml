@@ -6,6 +6,27 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.12</title>
+      <sparkle:version>14</sparkle:version>
+      <sparkle:shortVersionString>0.2.12</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Stops a login failure that is impossible to spot by eye.</strong></p>
+        <ul>
+          <li>The password and TOTP fields now force the input source to English while you type in them. With a Chinese input method active, typing <code>!</code> produces the full-width <code>！</code> — one character just like the real one, shown as the same dot behind the mask, and silently rejected by the gateway as a wrong password</li>
+          <li>Saving credentials that still contain non-ASCII characters (e.g. pasted from elsewhere) now shows the offending characters and asks for confirmation</li>
+          <li>The connect log flags non-ASCII characters in credentials by code point, so this failure is diagnosable from a log file</li>
+        </ul>
+      ]]></description>
+      <pubDate>Mon, 03 Aug 2026 16:45:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.12/VPNMenuBar-0.2.12.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="7Ey/u+cf649rQ8uJI9ay6G07DL+tIxdxLNPdMb1gFPGyVDwKr1GBDDm/uKDufOvmCZjk9eoeVPwhqrVhoHKYBw=="
+        length="1848494"
+      />
+    </item>
+    <item>
       <title>Version 0.2.11</title>
       <sparkle:version>13</sparkle:version>
       <sparkle:shortVersionString>0.2.11</sparkle:shortVersionString>

@@ -9,6 +9,9 @@ struct SettingsView: View {
     @State private var launchAtLogin: Bool = LoginItemManager.isEnabledPreference
     @State private var autoConnectOnLaunch: Bool = AutoConnectPreference.isEnabled
     @State private var showSavedAlert: Bool = false
+    @State private var showNonASCIIWarning: Bool = false
+    @State private var nonASCIIWarningMessage: String = ""
+    @State private var hasConfirmedNonASCII: Bool = false
     @State private var savedAlertTitle: String = ""
     @State private var savedAlertMessage: String = ""
 
@@ -36,10 +39,10 @@ struct SettingsView: View {
             Section("Advanced") {
                 TextField("openconnect path", text: $config.openconnectPath)
                 TextField("vpnc-script path", text: $config.vpncScriptPath)
-                // Kept as a .help tooltip rather than a caption Text: this Form
-                // has no width constraint, and a wrapping label made
-                // NSHostingController's window sizing throw (v0.2.10 crashed
-                // on opening Settings).
+                // Kept as a .help tooltip rather than a caption Text: a wrapping
+                // label in this Section made NSHostingController throw while
+                // sizing the window (v0.2.10 crashed on opening Settings).
+                // The .frame(width: 640) below does not prevent it.
                 TextField("User-Agent", text: Binding(
                     get: { config.userAgent ?? VPNConfig.defaultUserAgent },
                     set: { config.userAgent = $0 }
@@ -87,6 +90,21 @@ struct SettingsView: View {
         } message: {
             Text(savedAlertMessage)
         }
+        .alert("Non-ASCII characters in credentials", isPresented: $showNonASCIIWarning) {
+            Button("Go Back and Fix", role: .cancel) { }
+            Button("Save Anyway") {
+                hasConfirmedNonASCII = true
+                performSave()
+            }
+        } message: {
+            Text("""
+            These fields contain characters outside the standard keyboard set:
+
+            \(nonASCIIWarningMessage)
+
+            This is usually a Chinese input method producing a full-width ！ instead of !. The field is masked, so it looks correct, and the gateway will simply reject the login. Switch the input method to English and retype the field.
+            """)
+        }
     }
 
     private func load() {
@@ -97,6 +115,22 @@ struct SettingsView: View {
     }
 
     private func save() {
+        // Warn before saving, not after: once stored, a full-width ！ is
+        // invisible in the masked field and the gateway only ever says 401.
+        if !config.suspiciousCredentialFields.isEmpty, !hasConfirmedNonASCII {
+            nonASCIIWarningMessage = config.suspiciousCredentialFields
+                .map { field, scalars in
+                    let shown = scalars.prefix(6).map { String($0) }.joined(separator: " ")
+                    return "\(field): \(shown)"
+                }
+                .joined(separator: "\n")
+            showNonASCIIWarning = true
+            return
+        }
+        performSave()
+    }
+
+    private func performSave() {
         do {
             try configStore.save(config)
             // Close settings window and trigger a reconnect

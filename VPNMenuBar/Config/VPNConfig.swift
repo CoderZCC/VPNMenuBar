@@ -60,6 +60,42 @@ struct VPNConfig: Codable, Equatable {
         return copy
     }
 
+    /// Characters outside printable ASCII in a credential field.
+    ///
+    /// A CJK input method turns `!` into the full-width `！` (U+FF01). Both are
+    /// one character, so a length check can't see it, `cleanField` won't strip
+    /// it (it is neither invisible nor a control character), and a masked field
+    /// renders both as the same dot. The gateway just answers 401. Surfacing
+    /// this is the only way a user can catch it.
+    static func nonASCIICharacters(in value: String) -> [Unicode.Scalar] {
+        value.unicodeScalars.filter { $0.value < 0x20 || $0.value > 0x7E }
+    }
+
+    /// Credential fields containing non-ASCII characters, for a save-time warning.
+    var suspiciousCredentialFields: [(field: String, characters: [Unicode.Scalar])] {
+        [("Username", username),
+         ("Password prefix", passwordPrefix),
+         ("TOTP secret", totpSecret)]
+            .compactMap { name, value in
+                let bad = VPNConfig.nonASCIICharacters(in: value)
+                return bad.isEmpty ? nil : (name, bad)
+            }
+    }
+
+    /// Compact summary for the log: field name + code points, never the field
+    /// itself. An isolated code point does not meaningfully leak the secret and
+    /// it is the one detail that makes this failure diagnosable from a log.
+    var nonASCIICredentialSummary: String? {
+        let hits = suspiciousCredentialFields
+        guard !hits.isEmpty else { return nil }
+        return hits.map { field, scalars in
+            let codes = scalars.prefix(3)
+                .map { String(format: "U+%04X", $0.value) }
+                .joined(separator: ",")
+            return "\(field)=[\(codes)\(scalars.count > 3 ? ",…" : "")]"
+        }.joined(separator: " ")
+    }
+
     private static let invisibleScalars: Set<Unicode.Scalar> = [
         "\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}",
         "\u{2028}", "\u{2029}", "\u{00A0}", "\u{3000}",
