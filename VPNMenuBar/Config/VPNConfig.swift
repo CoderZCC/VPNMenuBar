@@ -13,6 +13,13 @@ struct VPNConfig: Codable, Equatable {
     var vpncScriptPath: String = ArchDetector.defaultPaths.vpncScript
     var skipDNSModification: Bool = true
 
+    // Two-step gateways (e.g. ocserv) send a second auth form asking for the
+    // OTP after the password is accepted. When true, the password and TOTP are
+    // written to openconnect's stdin as two separate lines instead of being
+    // concatenated into one. Optional so configs saved before this field
+    // existed still decode (nil == false).
+    var otpSentSeparately: Bool? = nil
+
     // Meta
     var schemaVersion: Int = 1
 

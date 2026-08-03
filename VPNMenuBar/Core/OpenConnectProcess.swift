@@ -10,7 +10,10 @@ enum OpenConnectHandshake: Equatable {
 /// UI / controller code only touches this protocol.
 protocol OpenConnectProcessRunning: AnyObject {
     /// Start `sudo openconnect ...` and write `password\n` to its stdin.
-    /// Returns after the process is spawned (not after handshake).
+    /// `password` may itself contain a newline — openconnect consumes one
+    /// stdin line per password-type form field, so a two-step gateway gets
+    /// "password\notp\n". Returns after the process is spawned (not after
+    /// handshake).
     func start(config: VPNConfig, password: String) throws
 
     /// Wait for initial handshake success or failure.
@@ -19,6 +22,11 @@ protocol OpenConnectProcessRunning: AnyObject {
 
     /// Is the spawned openconnect still running?
     func isRunning() -> Bool
+
+    /// Tail of the captured stderr (best effort). Used by the watchdog to
+    /// surface the openconnect death reason in the app log when the child
+    /// vanishes after a successful handshake.
+    func recentStderrTail(bytes: Int) -> String
 
     /// Send SIGTERM via `sudo -n pkill -x openconnect`. Idempotent.
     func stop() throws
@@ -38,8 +46,17 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
     }
 
     func start(config: VPNConfig, password: String) throws {
-        // Clean up any prior invocation.
+        // Clean up any prior invocation — and WAIT for it to actually die.
+        // A SIGTERM'd openconnect runs vpnc-script's disconnect phase
+        // asynchronously (deleting routes by destination, regardless of
+        // interface). If we spawn the new session before that cleanup
+        // finishes, it deletes the routes the new session just installed,
+        // leaving a live tunnel with an empty routing table.
         try? stop()
+        let stopDeadline = Date().addingTimeInterval(5)
+        while pgrepOpenConnect() && Date() < stopDeadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
         stderrHandle?.readabilityHandler = nil
         stderrHandle = nil
         process = nil
@@ -107,6 +124,8 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             "authentication failure",
             "sudo: a password is required",
             "Certificate verification failure",
+            "wrong otp value",
+            "wrong otp pin",
         ]
 
         let startTime = Date()
@@ -158,6 +177,13 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         pgrepOpenConnect()
     }
 
+    func recentStderrTail(bytes: Int) -> String {
+        let stderrText = stderrQueue.sync {
+            String(data: collectedStderr, encoding: .utf8) ?? ""
+        }
+        return tailOfStderr(stderrText, bytes: bytes)
+    }
+
     func stop() throws {
         _ = try? processRunner.run(
             executable: "/usr/bin/sudo",
@@ -205,6 +231,8 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
             return "sudo is prompting for a password. Configure NOPASSWD in visudo."
         case "Certificate verification failure":
             return "Server certificate verification failed. The gateway cert may have rotated — update the pin in Settings → Advanced."
+        case "wrong otp value", "wrong otp pin":
+            return "OTP rejected by server. Verify your authenticator code matches the server's expectation. If your secret and time are correct, the token may have been disabled — contact IT to reset it."
         default:
             return tailOfStderr(fullStderr, bytes: 200)
         }

@@ -113,6 +113,11 @@ struct OnboardingView: View {
                 ImportSecretFromImageButton(secret: $config.totpSecret, username: $config.username)
                 Spacer()
             }
+            Toggle("Server asks for password and OTP separately (two-step)",
+                   isOn: Binding(
+                       get: { config.otpSentSeparately ?? false },
+                       set: { config.otpSentSeparately = $0 }
+                   ))
             Text("All fields above are required. Paths can be edited later in Settings → Advanced.")
                 .font(.caption).foregroundColor(.secondary)
         }

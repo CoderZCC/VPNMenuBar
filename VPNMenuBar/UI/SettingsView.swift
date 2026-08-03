@@ -26,6 +26,11 @@ struct SettingsView: View {
                     ImportSecretFromImageButton(secret: $config.totpSecret, username: $config.username)
                     Spacer()
                 }
+                Toggle("Server asks for password and OTP separately (two-step)",
+                       isOn: Binding(
+                           get: { config.otpSentSeparately ?? false },
+                           set: { config.otpSentSeparately = $0 }
+                       ))
             }
 
             Section("Advanced") {

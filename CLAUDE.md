@@ -158,6 +158,8 @@ Things that require reading multiple files to understand — documenting once he
 
     The `install-deps.sh` script remains in the repo as a terminal-only fallback for users whose machines block osascript admin (rare; happens on heavily MDM-managed corporate Macs).
 
+14. **Two-step OTP auth + stop→start route-deletion race.** Some gateways (e.g. ocserv) accept the password first and then send a *second* auth form for the OTP. `VPNConfig.otpSentSeparately` (optional Bool so pre-existing configs still decode; nil == false) switches the stdin payload from one concatenated `prefix+totp` line to `password\notp\n` — openconnect consumes one stdin line per password-type form field. In two-step mode the "Password prefix" field holds the **full password**. Related race fixed at the same time: `OpenConnectProcess.start()` must wait (pgrep-poll, 5s cap) after `stop()` for the old openconnect to actually exit — a SIGTERM'd openconnect runs vpnc-script's disconnect phase asynchronously, which deletes routes **by destination regardless of interface**, so spawning the new session too early leaves a live tunnel with an empty routing table (symptom: handshake succeeds, tun has an IP, zero split-include routes, intranet unreachable). Also note: ocserv fail2ban-bans a source IP after a few failed auth attempts (~10 min, TLS handshake gets reset mid-negotiation) — don't probe a gateway with dummy credentials repeatedly.
+
 ## Distribution
 
 The repo IS the distribution. Three artifacts work together:

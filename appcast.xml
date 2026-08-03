@@ -6,6 +6,26 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.8</title>
+      <sparkle:version>10</sparkle:version>
+      <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <ul>
+          <li>Two-step login support: new "Server asks for password and OTP separately" toggle for gateways that request the password and OTP in two prompts (e.g. ocserv). In this mode the Password prefix field holds your full password</li>
+          <li>Fix: reconnecting right after a disconnect could leave a live tunnel with no routes (old session's cleanup deleted the new session's routes) — connect now waits for the previous openconnect to fully exit</li>
+          <li>Watchdog now logs the openconnect stderr tail when the tunnel dies unexpectedly, plus clearer OTP-rejection errors</li>
+        </ul>
+      ]]></description>
+      <pubDate>Mon, 03 Aug 2026 10:30:00 +0800</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.8/VPNMenuBar-0.2.8.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="dDwuzGTANY8k/AaQ9zXFPxLlv7kRmpqb7v/FB+xrAFcrjD0HFooXBfpsc53XLYkqQIeKEYkIilM7akt7RbAsCA=="
+        length="1795250"
+      />
+    </item>
+    <item>
       <title>Version 0.2.7</title>
       <sparkle:version>9</sparkle:version>
       <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>

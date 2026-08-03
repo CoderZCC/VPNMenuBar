@@ -120,7 +120,12 @@ final class VPNController: ObservableObject {
             state = .failed(reason: "Invalid TOTP secret — please check Settings.")
             return
         }
-        let password = config.passwordPrefix + code
+        // Two-step gateways expect the OTP as a second stdin line (see
+        // VPNConfig.otpSentSeparately); classic gateways expect one
+        // concatenated password.
+        let password = (config.otpSentSeparately ?? false)
+            ? config.passwordPrefix + "\n" + code
+            : config.passwordPrefix + code
 
         let proc = openConnectProcess
         do {
@@ -215,9 +220,14 @@ final class VPNController: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 guard let self else { return }
                 let stillRunning = self.openConnectProcess.isRunning()
+                let tail = stillRunning ? "" : self.openConnectProcess.recentStderrTail(bytes: 600)
                 await MainActor.run {
                     if !stillRunning, case .connected = self.state {
-                        AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected")
+                        if tail.isEmpty {
+                            AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected (no stderr captured)")
+                        } else {
+                            AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected. stderr tail:\n\(tail)")
+                        }
                         self.state = .disconnected
                         Self.postUnexpectedDisconnectNotification()
                     }
