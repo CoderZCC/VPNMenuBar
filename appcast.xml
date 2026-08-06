@@ -6,6 +6,26 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.15</title>
+      <sparkle:version>17</sparkle:version>
+      <sparkle:shortVersionString>0.2.15</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Reconnects by itself after the connection dies unexpectedly.</strong></p>
+        <ul>
+          <li>When the openconnect process exits while connected — most commonly the Mac slept long enough for the server-side session cookie to expire, so openconnect's own resume gets a 401 and gives up — the app now re-authenticates from scratch with a fresh one-time code instead of sitting disconnected until you click Connect</li>
+          <li>The automatic retry is skipped while the network is down (the existing network-recovery reconnect handles that case) and runs at most once per minute, so an unstable gateway is never hammered</li>
+        </ul>
+      ]]></description>
+      <pubDate>Thu, 06 Aug 2026 16:10:00 +0400</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.15/VPNMenuBar-0.2.15.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="N4qO2MIQnQW3xjaAfnAYOhecdA7oUBndVrTkdbJoru5X2YbqzMPNTOR5gZPv6dUIC4IH23NTRDKAYEG6zRgFAw=="
+        length="1854323"
+      />
+    </item>
+    <item>
       <title>Version 0.2.14</title>
       <sparkle:version>16</sparkle:version>
       <sparkle:shortVersionString>0.2.14</sparkle:shortVersionString>

@@ -14,6 +14,7 @@ A macOS 13+ status-bar app that wraps OpenConnect for Cisco AnyConnect-compatibl
 - **Architecture-aware** — Universal Binary; auto-detects Apple Silicon vs Intel and uses the right Homebrew prefix (`/opt/homebrew` vs `/usr/local`)
 - **TOTP built in** — RFC 6238 HMAC-SHA1 via CryptoKit, with its own Base32 decoder. Optional QR-code import from a screenshot file
 - **Auto-reconnect on network change** — drops the VPN cleanly when WiFi disconnects, reconnects automatically when it comes back (only if you connected manually — failed connects don't loop-retry)
+- **Auto-reconnect after unexpected drops** — if the openconnect process dies while connected (e.g. the session cookie expired after the Mac slept), the app re-authenticates from scratch with a fresh TOTP instead of waiting for a manual reconnect (throttled to once per minute so an unstable gateway isn't hammered)
 - **Stale host-route cleanup** — scrubs leftover routes from the previous WiFi gateway before each connect, fixing the "Failed to connect after WiFi switch" symptom
 - **Status-bar agent** — `LSUIElement`, no Dock icon, no notification spam
 - **Auto-update** — checks GitHub Releases for new versions via [Sparkle](https://sparkle-project.org/). One-click update from the menu bar

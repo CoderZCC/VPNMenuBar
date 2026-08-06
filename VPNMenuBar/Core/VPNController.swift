@@ -46,6 +46,20 @@ final class VPNController: ObservableObject {
     /// network comes back. Cleared on explicit user-initiated disconnect.
     private var shouldAutoReconnect: Bool = false
 
+    /// Last reachability value reported by the network monitor. Lets the
+    /// watchdog skip a doomed reconnect attempt (and its failure-counter cost)
+    /// when the child died because the network itself is down — the
+    /// reachability handler picks the reconnect up once the network returns.
+    private var networkReachable = true
+
+    /// Last time the watchdog auto-reconnected after an unexpected child death.
+    /// The fail2ban cooldown only counts *failed* handshakes, so a gateway that
+    /// accepts the handshake and then kills the session seconds later would
+    /// loop spawn→die→respawn forever without ever tripping it. This throttle
+    /// bounds that pattern to one attempt per interval.
+    private var lastChildDeathReconnect: Date?
+    private static let childDeathReconnectMinInterval: TimeInterval = 60
+
     init(
         configStore: ConfigStore,
         dependencyChecker: DependencyChecker,
@@ -95,6 +109,7 @@ final class VPNController: ObservableObject {
 
     private func handleNetworkChange(reachable: Bool) async {
         AppLogger.shared.info("network change: reachable=\(reachable) state=\(state) shouldAutoReconnect=\(shouldAutoReconnect)")
+        networkReachable = reachable
         if reachable {
             // Network came back — auto-reconnect if the user had previously been
             // intentionally connected (shouldAutoReconnect flag set).
@@ -325,20 +340,51 @@ final class VPNController: ObservableObject {
                 guard let self else { return }
                 let stillRunning = self.openConnectProcess.isRunning()
                 let tail = stillRunning ? "" : self.openConnectProcess.recentStderrTail(bytes: 600)
-                await MainActor.run {
-                    if !stillRunning, case .connected = self.state {
-                        if tail.isEmpty {
-                            AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected (no stderr captured)")
-                        } else {
-                            AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected. stderr tail:\n\(tail)")
-                        }
-                        self.state = .disconnected
-                        Self.postUnexpectedDisconnectNotification()
+                let didTransition = await MainActor.run { () -> Bool in
+                    guard !stillRunning, case .connected = self.state else { return false }
+                    if tail.isEmpty {
+                        AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected (no stderr captured)")
+                    } else {
+                        AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected. stderr tail:\n\(tail)")
                     }
+                    self.state = .disconnected
+                    Self.postUnexpectedDisconnectNotification()
+                    return true
                 }
-                if !stillRunning { return }
+                if !stillRunning {
+                    if didTransition {
+                        await self.reconnectAfterChildDeath()
+                    }
+                    return
+                }
             }
         }
+    }
+
+    /// The openconnect child died while we believed we were connected — most
+    /// commonly the machine slept past ocserv's cookie timeout, openconnect's
+    /// own resume got a 401 and it exited. A fresh connect() (full re-auth,
+    /// new TOTP) is the fix, so do it automatically when the user's intent
+    /// flag is set. If the network is down, defer to handleNetworkChange —
+    /// spawning openconnect against a dead network would only burn a
+    /// failure-counter slot toward the fail2ban cooldown. A *failed* reconnect
+    /// does not loop (connect() failure doesn't restart the watchdog, and the
+    /// cooldown counts it); a *succeeding-then-dying* one would — hence the
+    /// min-interval throttle on top.
+    private func reconnectAfterChildDeath() async {
+        guard shouldAutoReconnect else { return }
+        guard networkReachable else {
+            AppLogger.shared.info("watchdog: network unreachable — deferring auto-reconnect to the reachability handler")
+            return
+        }
+        if let last = lastChildDeathReconnect,
+           Date().timeIntervalSince(last) < Self.childDeathReconnectMinInterval {
+            AppLogger.shared.warn("watchdog: child died again within \(Int(Self.childDeathReconnectMinInterval))s of the last auto-reconnect — gateway looks unstable, staying disconnected")
+            return
+        }
+        lastChildDeathReconnect = Date()
+        AppLogger.shared.info("watchdog: auto-reconnecting after unexpected child exit")
+        await connect()
     }
 
     private static func postUnexpectedDisconnectNotification() {
