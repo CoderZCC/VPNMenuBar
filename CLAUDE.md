@@ -50,9 +50,18 @@ xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar -destination 'platfo
 xcodegen generate
 xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar -destination 'platform=macOS' -configuration Release clean build
 
-# Copy out of DerivedData and zip with ditto (preserves xattrs):
-APP_SRC="$(xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar -showBuildSettings 2>/dev/null \
+# Copy out of DerivedData and zip with ditto (preserves xattrs).
+# `-configuration Release` is REQUIRED on showBuildSettings — without it you get
+# the *Debug* CODESIGNING_FOLDER_PATH and silently ship a Debug build (or, if no
+# Debug build exists, cp fails after you already deleted the in-tree .app).
+APP_SRC="$(xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar -configuration Release -showBuildSettings 2>/dev/null \
   | awk -F' = ' '/CODESIGNING_FOLDER_PATH/ {print $2}' | head -1)"
+# Verify before destroying the in-tree copy, and confirm the version is the one
+# you just bumped — a stale DerivedData path is indistinguishable by eye.
+test -d "$APP_SRC" || { echo "no Release build at: $APP_SRC"; exit 1; }
+/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_SRC/Contents/Info.plist"
+# rm -rf first: `cp -R src dst` with an existing dst nests it as dst/src.
+rm -rf ./VPNMenuBar.app
 cp -R "$APP_SRC" ./VPNMenuBar.app
 ditto -c -k --keepParent ./VPNMenuBar.app ./VPNMenuBar-X.Y.Z.zip
 ```
