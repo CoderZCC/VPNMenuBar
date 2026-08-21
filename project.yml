@@ -36,8 +36,8 @@ targets:
       properties:
         CFBundleName: VPNMenuBar
         CFBundleDisplayName: VPN MenuBar
-        CFBundleShortVersionString: "0.2.15"
-        CFBundleVersion: "17"
+        CFBundleShortVersionString: "0.2.16"
+        CFBundleVersion: "18"
         LSMinimumSystemVersion: "13.0"
         LSUIElement: true
         NSUserNotificationAlertStyle: alert

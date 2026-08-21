@@ -163,9 +163,13 @@ final class VPNController: ObservableObject {
             checker.check(config: config)
         }.value
         lastDependencyStatuses = statuses
-        let depsSummary = statuses.map { "\($0.id)=\($0.passed ? "ok" : "fail")" }.joined(separator: " ")
+        let depsSummary = statuses.map { s -> String in
+            let verdict = s.passed ? "ok" : (s.isSkipped ? "skip" : "fail")
+            return "\(s.id)=\(verdict)"
+        }.joined(separator: " ")
         AppLogger.shared.info("dependency check: \(depsSummary)")
-        if let failed = statuses.first(where: { !$0.passed }) {
+        if let failed = statuses.first(where: { !$0.passed && !$0.isSkipped })
+            ?? statuses.first(where: { !$0.passed }) {
             AppLogger.shared.error("connect blocked — dependency \(failed.id) failed: \(failed.detail)")
             state = .failed(reason: "Dependency not ready: \(failed.detail)")
             return

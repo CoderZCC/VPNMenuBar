@@ -8,7 +8,7 @@ enum DependencyID: String { case homebrew, openconnect, sudoersRule, vpncScript 
 /// `DependencyInstaller`.
 enum InAppFix: Equatable {
     case openTerminalForHomebrew
-    case installOpenconnect(brewPath: String)
+    case installOpenconnect(brewPath: String, upgrade: Bool)
     case configureSudoers(username: String, openconnectPath: String)
     case resetVpncScriptPath(to: String)
 }
@@ -20,6 +20,26 @@ struct DependencyStatus: Equatable {
     let fixHint: String
     let fixCommand: String?
     let inAppFix: InAppFix?
+    /// True when the probe never ran because a prerequisite dependency failed.
+    /// Still `passed == false` (the UI keeps treating it as unmet), but the log
+    /// summary renders it as `skip` so it doesn't read as an independent failure.
+    let isSkipped: Bool
+
+    init(id: DependencyID,
+         passed: Bool,
+         detail: String,
+         fixHint: String,
+         fixCommand: String?,
+         inAppFix: InAppFix?,
+         isSkipped: Bool = false) {
+        self.id = id
+        self.passed = passed
+        self.detail = detail
+        self.fixHint = fixHint
+        self.fixCommand = fixCommand
+        self.inAppFix = inAppFix
+        self.isSkipped = isSkipped
+    }
 }
 
 class DependencyChecker {
@@ -68,9 +88,11 @@ class DependencyChecker {
     }
 
     private func checkOpenconnect(config: VPNConfig, homebrewPassed: Bool) -> DependencyStatus {
-        let brewFix: InAppFix? = homebrewPassed
-            ? .installOpenconnect(brewPath: ArchDetector.defaultPaths.brew)
-            : nil
+        func brewFix(upgrade: Bool) -> InAppFix? {
+            homebrewPassed
+                ? .installOpenconnect(brewPath: ArchDetector.defaultPaths.brew, upgrade: upgrade)
+                : nil
+        }
 
         guard fileManager.fileExists(atPath: config.openconnectPath) else {
             return DependencyStatus(
@@ -81,7 +103,7 @@ class DependencyChecker {
                     ? "Click Install via brew to run 'brew install openconnect' inside the app."
                     : "openconnect not found. Install Homebrew first (the row above), then come back and install openconnect.",
                 fixCommand: "brew install openconnect",
-                inAppFix: brewFix
+                inAppFix: brewFix(upgrade: false)
             )
         }
 
@@ -101,28 +123,59 @@ class DependencyChecker {
                 fixCommand: nil,
                 inAppFix: nil
             )
-        } else {
+        } else if let missingLib = Self.missingDynamicLibrary(inStderr: result.stderr) {
+            // A Homebrew dependency was upgraded past the ABI this openconnect
+            // build links against (e.g. nettle 3 -> 4 renames libhogweed.6 to
+            // libhogweed.7), so dyld refuses to start the process at all.
+            // `brew reinstall` re-pours the SAME bottle and does not help —
+            // only upgrading to a build compiled against the new dependency does.
             return DependencyStatus(
                 id: .openconnect,
                 passed: false,
-                detail: "openconnect at \(config.openconnectPath) failed to run",
+                detail: "openconnect cannot start — missing dynamic library \(missingLib)",
+                fixHint:
+                    "A Homebrew dependency was upgraded to a version openconnect was not built against, " +
+                    "so \(missingLib) no longer exists. Upgrade openconnect to a build that links the new " +
+                    "library — 'brew reinstall' will NOT fix this, it re-installs the same broken build.",
+                fixCommand: "brew upgrade openconnect",
+                inAppFix: brewFix(upgrade: true)
+            )
+        } else if result.exitCode == -1 && result.stderr == "timeout" {
+            return DependencyStatus(
+                id: .openconnect,
+                passed: false,
+                detail: "openconnect at \(config.openconnectPath) did not respond to --version within 3s",
+                fixHint: "openconnect exists but hung on --version. Try running it in Terminal to see where it stalls.",
+                fixCommand: "\(config.openconnectPath) --version",
+                inAppFix: nil
+            )
+        } else {
+            let reason = Self.firstMeaningfulLine(result.stderr)
+            return DependencyStatus(
+                id: .openconnect,
+                passed: false,
+                detail: reason.isEmpty
+                    ? "openconnect at \(config.openconnectPath) failed to run (exit \(result.exitCode))"
+                    : "openconnect at \(config.openconnectPath) failed to run — \(reason)",
                 fixHint: "openconnect exists but --version returned non-zero. Reinstall with 'brew reinstall openconnect'.",
                 fixCommand: "brew reinstall openconnect",
-                inAppFix: brewFix
+                inAppFix: brewFix(upgrade: false)
             )
         }
     }
 
     private func checkSudoersRule(config: VPNConfig, openconnectPassed: Bool) -> DependencyStatus {
-        // Skip if openconnect itself is missing — no point in double-reporting.
+        // Skip when openconnect is missing OR cannot start — both probes below
+        // invoke it, so they would just re-report the same failure on this row.
         guard openconnectPassed else {
             return DependencyStatus(
                 id: .sudoersRule,
                 passed: false,
-                detail: "Skipped (openconnect missing)",
+                detail: "Not checked — the openconnect binary above must work first",
                 fixHint: "Fix the openconnect dependency above first, then recheck.",
                 fixCommand: nil,
-                inAppFix: nil
+                inAppFix: nil,
+                isSkipped: true
             )
         }
 
@@ -200,5 +253,33 @@ class DependencyChecker {
             fixCommand: nil,
             inAppFix: resetFix
         )
+    }
+
+    // MARK: - stderr parsing
+
+    /// Extract the missing library's filename from a dyld load failure.
+    /// dyld writes `Library not loaded: /opt/homebrew/opt/nettle/lib/libhogweed.6.dylib`
+    /// followed by a `Reason: tried: ...` block. Returns nil for any other stderr.
+    static func missingDynamicLibrary(inStderr stderr: String) -> String? {
+        let marker = "Library not loaded:"
+        for line in stderr.split(separator: "\n") {
+            guard let range = line.range(of: marker) else { continue }
+            let path = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            guard !path.isEmpty else { continue }
+            // Report just the filename — the full path is the *expected*
+            // location, which no longer exists and only adds noise.
+            return (path as NSString).lastPathComponent
+        }
+        return nil
+    }
+
+    /// First non-blank stderr line, truncated so it stays on one row in the UI.
+    static func firstMeaningfulLine(_ stderr: String) -> String {
+        for line in stderr.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            return trimmed.count > 160 ? String(trimmed.prefix(160)) + "…" : trimmed
+        }
+        return ""
     }
 }

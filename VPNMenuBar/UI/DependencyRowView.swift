@@ -66,7 +66,8 @@ struct DependencyRowView: View {
     private func fixButtonLabel(for fix: InAppFix) -> String {
         switch fix {
         case .openTerminalForHomebrew:           return "Open Terminal"
-        case .installOpenconnect:                return "Install via brew"
+        case .installOpenconnect(_, let upgrade):
+            return upgrade ? "Upgrade via brew" : "Install via brew"
         case .configureSudoers:                  return "Configure sudo permissions"
         case .resetVpncScriptPath:               return "Reset path"
         }

@@ -6,6 +6,7 @@ enum DependencyInstallError: Error, LocalizedError {
     case shellFailed(stderr: String)
     case osascriptFailed(message: String)
     case unsupported(reason: String)
+    case nothingToUpgrade
     case configIO(underlying: Error)
 
     var errorDescription: String? {
@@ -18,6 +19,11 @@ enum DependencyInstallError: Error, LocalizedError {
             return m
         case .unsupported(let r):
             return r
+        case .nothingToUpgrade:
+            return "Homebrew reports openconnect is already the newest version, so the upgrade changed nothing "
+                + "and the broken library link is still there. Homebrew has not yet published a build against "
+                + "the new dependency. Either wait for the formula to be updated and try again, or rebuild from "
+                + "source in Terminal (takes several minutes):\n\nbrew reinstall --build-from-source openconnect"
         case .configIO(let e):
             return "Config I/O failed: \(e.localizedDescription)"
         }
@@ -50,18 +56,24 @@ enum DependencyInstaller {
         }
     }
 
-    /// Run `brew install openconnect` as the current user via Process.
-    /// Streams stdout+stderr lines to the progress callback.
-    /// Throws `shellFailed(stderr:)` on non-zero exit.
+    /// Run `brew install openconnect` (or `brew upgrade openconnect`) as the
+    /// current user via Process. Streams stdout+stderr lines to the progress
+    /// callback. Throws `shellFailed(stderr:)` on non-zero exit.
+    ///
+    /// `upgrade: true` is required when openconnect is installed but cannot start
+    /// because a dependency outgrew its ABI — `install` would report
+    /// "already installed" and exit 0 without fixing anything.
     static func installOpenconnect(
         brewPath: String,
+        upgrade: Bool = false,
         progress: @Sendable @escaping (String) -> Void
     ) async throws {
-        AppLogger.shared.info("DependencyInstaller: brew install openconnect starting (brewPath=\(brewPath))")
+        let subcommand = upgrade ? "upgrade" : "install"
+        AppLogger.shared.info("DependencyInstaller: brew \(subcommand) openconnect starting (brewPath=\(brewPath))")
         try await Task.detached(priority: .userInitiated) {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: brewPath)
-            p.arguments = ["install", "openconnect"]
+            p.arguments = [subcommand, "openconnect"]
 
             // brew needs its own bin dir on PATH so it can find auxiliary tools.
             let brewDir = (brewPath as NSString).deletingLastPathComponent
@@ -113,13 +125,18 @@ enum DependencyInstaller {
             if p.terminationStatus != 0 {
                 let stderrText = stderrAccum.snapshotString()
                 let tail = String(stderrText.suffix(400))
-                AppLogger.shared.error("DependencyInstaller: brew install openconnect exited \(p.terminationStatus)\nstderr tail:\n\(tail)")
+                AppLogger.shared.error("DependencyInstaller: brew \(subcommand) openconnect exited \(p.terminationStatus)\nstderr tail:\n\(tail)")
                 throw DependencyInstallError.shellFailed(
-                    stderr: tail.isEmpty ? "brew install exited \(p.terminationStatus)" : tail
+                    stderr: tail.isEmpty ? "brew \(subcommand) exited \(p.terminationStatus)" : tail
                 )
             }
+
+            if upgrade && stderrAccum.snapshotString().contains("already installed") {
+                AppLogger.shared.error("DependencyInstaller: brew upgrade openconnect was a no-op — formula not yet rebuilt against the new dependency")
+                throw DependencyInstallError.nothingToUpgrade
+            }
         }.value
-        AppLogger.shared.info("DependencyInstaller: brew install openconnect succeeded")
+        AppLogger.shared.info("DependencyInstaller: brew \(subcommand) openconnect succeeded")
     }
 
     /// Sanitize a username for use in a /etc/sudoers.d filename.

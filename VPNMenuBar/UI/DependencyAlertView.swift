@@ -77,8 +77,8 @@ struct DependencyAlertView: View {
             switch fix {
             case .openTerminalForHomebrew:
                 try DependencyInstaller.openTerminalForHomebrew()
-            case .installOpenconnect(let brewPath):
-                try await DependencyInstaller.installOpenconnect(brewPath: brewPath) { line in
+            case .installOpenconnect(let brewPath, let upgrade):
+                try await DependencyInstaller.installOpenconnect(brewPath: brewPath, upgrade: upgrade) { line in
                     Task { @MainActor in
                         self.progressLine = line
                     }
