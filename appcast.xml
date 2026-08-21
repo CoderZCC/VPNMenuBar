@@ -6,6 +6,27 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.16</title>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>0.2.16</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Says which library is missing when a Homebrew upgrade breaks openconnect.</strong></p>
+        <ul>
+          <li>Upgrading a Homebrew library that openconnect depends on (e.g. nettle 3 &rarr; 4) can leave openconnect unable to start at all, because the library file it links against was renamed. Connect then fails with the dependency check reporting only "openconnect failed to run" — and, because the sudo permission check runs through the same binary, it wrongly reported the sudo rule as broken too, sending the diagnosis in the wrong direction entirely</li>
+          <li>The dependency row now names the exact missing library, and its Fix button runs <code>brew upgrade openconnect</code> instead of <code>brew install</code>, which does nothing on an already-installed version. If Homebrew has not yet published a rebuilt version, the app says so and points at the source rebuild rather than reporting a successful fix that changed nothing</li>
+          <li>A <code>--version</code> that hangs is reported as a timeout, and other failures now include openconnect's own first error line</li>
+        </ul>
+      ]]></description>
+      <pubDate>Fri, 21 Aug 2026 09:16:27 +0400</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.16/VPNMenuBar-0.2.16.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="wc+mK7LDdhdxFY0pJbq6xNrZi5dDOmS90H5JOg9PlsrTXaxIyq1Q0EgXksArlpBuCWfvekcB4DAykr8lSUcvAQ=="
+        length="1860373"
+      />
+    </item>
+    <item>
       <title>Version 0.2.15</title>
       <sparkle:version>17</sparkle:version>
       <sparkle:shortVersionString>0.2.15</sparkle:shortVersionString>
