@@ -35,7 +35,30 @@ final class VPNController: ObservableObject {
 
     /// TOTP step already handed to the gateway. A code is single-use — reusing
     /// one inside its 30s window gets a 401 for replay, not for being wrong.
-    private var lastSubmittedTOTPCounter: UInt64?
+    ///
+    /// Persisted, not held in memory: the app quitting and relaunching inside
+    /// one 30s step is not an edge case, it is precisely what applying an update
+    /// does — the old process authenticates, quits, and the new one auto-connects
+    /// ~5s later with a blank in-memory guard. Observed 2026-08-21: v0.2.15
+    /// connected with counter 59576323, the v0.2.16 process resubmitted the same
+    /// counter 8s later, ocserv 401'd the replay and its fail2ban then reset the
+    /// next two TLS handshakes. Stored in UserDefaults rather than VPNConfig to
+    /// stay out of the Codable schema — same reasoning as launchAtLoginEnabled.
+    private static let lastTOTPCounterKey = "lastSubmittedTOTPCounter"
+
+    private var lastSubmittedTOTPCounter: UInt64? {
+        get {
+            (UserDefaults.standard.object(forKey: Self.lastTOTPCounterKey) as? NSNumber)?.uint64Value
+        }
+        set {
+            let defaults = UserDefaults.standard
+            if let newValue {
+                defaults.set(NSNumber(value: newValue), forKey: Self.lastTOTPCounterKey)
+            } else {
+                defaults.removeObject(forKey: Self.lastTOTPCounterKey)
+            }
+        }
+    }
 
     private let handshakeTimeout: TimeInterval
     private let pollInterval: TimeInterval

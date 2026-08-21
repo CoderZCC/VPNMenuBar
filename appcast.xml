@@ -6,6 +6,27 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.17</title>
+      <sparkle:version>19</sparkle:version>
+      <sparkle:shortVersionString>0.2.17</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Fixes the login failure that happens right after installing an update.</strong></p>
+        <ul>
+          <li>A one-time code can only be used once. The app already refused to resubmit a code it had sent, but it forgot that as soon as it quit — and installing an update is exactly "connect, quit, relaunch, auto-connect five seconds later", all inside the same 30-second code window. So the first connect after every update resent the previous code and the gateway rejected the replay with a 401 that looks identical to a wrong code. Worse, the retries that followed tripped the gateway's brute-force protection, which then reset the TLS connection outright and made it look like a network fault</li>
+          <li>The record is now kept across restarts, so the app waits for the next code instead of resending the old one</li>
+          <li>Note: this cannot fix its own installation — the version being replaced never wrote that record, so the very first connect after updating <em>to</em> this build may still fail once. Wait ~30 seconds and connect again; it will not recur after that</li>
+        </ul>
+      ]]></description>
+      <pubDate>Fri, 21 Aug 2026 09:26:36 +0400</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.17/VPNMenuBar-0.2.17.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="vBsPDvKV5J2OUGbTzW+c2CCgg4fw3o6iXUwYCyaFDGTdGFv3MEqKgF12AmUhTAfkqvN7nzr6bHeL+skKWQovDw=="
+        length="1861524"
+      />
+    </item>
+    <item>
       <title>Version 0.2.16</title>
       <sparkle:version>18</sparkle:version>
       <sparkle:shortVersionString>0.2.16</sparkle:shortVersionString>
