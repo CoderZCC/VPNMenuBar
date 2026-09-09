@@ -6,6 +6,28 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.19</title>
+      <sparkle:version>21</sparkle:version>
+      <sparkle:shortVersionString>0.2.19</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Intranet DNS rules now take effect when you save them.</strong></p>
+        <ul>
+          <li>Typing a rule in Settings used to be only half the job — the files were written from a button in another window, so you had to save, close, find Check Dependencies and click again. Saving now writes them itself, with a single authorization, and you never leave Settings</li>
+          <li>You are only asked to authorize when the files actually differ from your rules, so ordinary saves of unrelated settings never raise a prompt</li>
+          <li>A save that changes only the DNS rules no longer disconnects the VPN. It used to, and reconnecting could stall for the remainder of the current one-time-code window &mdash; up to half a minute of real downtime for an edit that has nothing to do with the tunnel</li>
+          <li>The rules box has a proper placeholder instead of pre-filled example text you had to delete first, and now matches the other fields in the window</li>
+        </ul>
+      ]]></description>
+      <pubDate>Wed, 09 Sep 2026 17:16:11 +0400</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.19/VPNMenuBar-0.2.19.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="lgG5Lyce5pXwvgJ/6FpLG36E1HGbRra+r8l7OW+Ibhs+7V0zKtVEWwZLOlB7z94mtuHC+VXha6ATzz22qdP6DQ=="
+        length="1944009"
+      />
+    </item>
+    <item>
       <title>Version 0.2.18</title>
       <sparkle:version>20</sparkle:version>
       <sparkle:shortVersionString>0.2.18</sparkle:shortVersionString>

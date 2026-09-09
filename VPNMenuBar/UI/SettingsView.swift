@@ -216,19 +216,59 @@ struct SettingsView: View {
     private func performSave() {
         do {
             try configStore.save(config)
-            // Close settings window and trigger a reconnect
-            NSApp.keyWindow?.close()
-            Task {
-                if controller.state.isConnected {
-                    await controller.disconnect()
-                }
-                await controller.connect()
-            }
         } catch {
             AppLogger.shared.error("SettingsView save failed: \(error)")
             savedAlertTitle = "Save Failed"
             savedAlertMessage = "The config file may be read-only — check permissions under ~/Library/Application Support."
             showSavedAlert = true
+            return
+        }
+
+        // Capture the window before the authorization dialog steals key status.
+        let settingsWindow = NSApp.keyWindow
+        let rules = config.resolverRules ?? []
+        let gatewayHost = OpenConnectProcess.extractHost(from: config.gateway)
+        // Writing the resolver files is part of saving the rules, not a second
+        // errand in another window: asking the user to go find Check
+        // Dependencies after typing a rule here is the whole reason this exists.
+        // Nothing is asked for when the files already match, so an ordinary
+        // save of unrelated settings never raises a prompt.
+        let needsResolverWork = !ResolverFileManager.pendingRules(rules).isEmpty
+            || !ResolverFileManager.orphanedDomains(keeping: rules).isEmpty
+
+        // Resolver files have nothing to do with the tunnel, so a save that
+        // only edits them must not bounce the VPN. Reconnecting anyway costs a
+        // real outage: the TOTP replay guard makes the new connect wait out the
+        // remainder of the 30s step (observed: 28s of downtime for a DNS-only
+        // edit).
+        var savedWithoutRules = config
+        savedWithoutRules.resolverRules = nil
+        var previousWithoutRules = originalConfig
+        previousWithoutRules.resolverRules = nil
+        let connectionSettingsChanged = savedWithoutRules != previousWithoutRules
+
+        Task { @MainActor in
+            if needsResolverWork {
+                do {
+                    try await ResolverFileManager.install(rules: rules, gatewayHost: gatewayHost)
+                } catch DependencyInstallError.userCancelled {
+                    // Silent: config is saved, the files simply aren't written.
+                    // The dependency row stays red and either place can retry.
+                } catch {
+                    // Keep the window open so the alert is actually visible.
+                    savedAlertTitle = "DNS rules not installed"
+                    savedAlertMessage = error.localizedDescription
+                        + "\n\nEverything else was saved. You can retry from Check Dependencies."
+                    showSavedAlert = true
+                    return
+                }
+            }
+            settingsWindow?.close()
+            guard connectionSettingsChanged else { return }
+            if controller.state.isConnected {
+                await controller.disconnect()
+            }
+            await controller.connect()
         }
     }
 }
