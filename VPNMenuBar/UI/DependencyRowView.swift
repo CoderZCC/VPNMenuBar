@@ -70,6 +70,7 @@ struct DependencyRowView: View {
             return upgrade ? "Upgrade via brew" : "Install via brew"
         case .configureSudoers:                  return "Configure sudo permissions"
         case .resetVpncScriptPath:               return "Reset path"
+        case .installResolverFiles:              return "Install DNS rules"
         }
     }
 

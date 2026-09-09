@@ -358,7 +358,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
 
     /// Strip optional `https://` scheme and any `:port` / `/path` suffix
     /// from a gateway string, leaving just the host.
-    private static func extractHost(from gateway: String) -> String {
+    static func extractHost(from gateway: String) -> String {
         var s = gateway.trimmingCharacters(in: .whitespacesAndNewlines)
         if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }
         if let i = s.firstIndex(where: { $0 == "/" || $0 == ":" }) {

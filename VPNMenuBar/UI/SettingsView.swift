@@ -14,6 +14,10 @@ struct SettingsView: View {
     @State private var hasConfirmedNonASCII: Bool = false
     @State private var savedAlertTitle: String = ""
     @State private var savedAlertMessage: String = ""
+    /// Edited as text rather than bound through parse/format, so an
+    /// in-progress line (a domain typed before its nameserver) is not
+    /// rewritten under the cursor.
+    @State private var resolverRulesText: String = ""
 
     private var hasChanges: Bool { config != originalConfig }
 
@@ -50,6 +54,54 @@ struct SettingsView: View {
                 .help("Some gateways only serve the OTP form to the official Cisco client and reject openconnect's own User-Agent with a 401. Leave empty to send openconnect's default.")
                 Toggle("Skip DNS modification (use bundled vpnc-script--no-dns)",
                        isOn: $config.skipDNSModification)
+            }
+
+            Section("Intranet DNS rules") {
+                // TextEditor has no placeholder, so it gets one drawn on top.
+                // Prefilling the editor itself would make the user delete the
+                // example before typing.
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $resolverRulesText)
+                        // Small monospaced: a rule is domain + IPv4, which must
+                        // fit one line or the list stops being readable.
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .autocorrectionDisabled(true)
+                        .padding(EdgeInsets(top: 4, leading: 3, bottom: 4, trailing: 3))
+                        .onChange(of: resolverRulesText) { newValue in
+                            config.resolverRules = ResolverRule.parse(newValue)
+                        }
+                    if resolverRulesText.isEmpty {
+                        Text(verbatim: "portal.intranet.example.com  10.0.0.53")
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundColor(Color(nsColor: .placeholderTextColor))
+                            .lineLimit(1)
+                            .padding(EdgeInsets(top: 8, leading: 8, bottom: 0, trailing: 0))
+                            .allowsHitTesting(false)
+                    }
+                }
+                // Match the bordered TextFields above — a bare TextEditor in a
+                // Form has no border at all and reads as unfinished.
+                .frame(height: 72)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+                .help(
+                    "One rule per line: <domain> <nameserver>, e.g. "
+                        + "intranet.example.com 10.0.0.53\n\n"
+                        + "Each rule becomes /etc/resolver/<domain>, so ONLY that domain is resolved "
+                        + "by that nameserver — every other name keeps using the system resolver and "
+                        + "the global DNS setting is left alone. Use the narrowest name that is "
+                        + "actually internal: a parent domain also captures every host beneath it, "
+                        + "including the VPN gateway itself, which would make reconnecting impossible "
+                        + "while the VPN is down. Leave this empty unless an intranet name genuinely "
+                        + "has no public DNS record. Install the files from Check Dependencies."
+                    )
             }
 
             Section {
@@ -111,10 +163,41 @@ struct SettingsView: View {
         if let existing = (try? configStore.load()) ?? nil {
             config = existing
             originalConfig = existing
+            resolverRulesText = ResolverRule.format(existing.resolverRules ?? [])
         }
     }
 
     private func save() {
+        // DNS rules are validated before anything else: a rule that captures the
+        // gateway's own hostname is the one setting in this window the user cannot
+        // recover from without root, so it is a hard block, not a confirm-anyway warning.
+        let parsed = ResolverRule.parseReportingErrors(resolverRulesText)
+        if !parsed.badLines.isEmpty {
+            savedAlertTitle = "Unrecognized DNS rule"
+            let format: String = "Each line must be a domain and an IPv4 nameserver "
+                + "separated by a space, e.g. \"intranet.example.com 10.0.0.53\"."
+            let offending: String = parsed.badLines.joined(separator: "\n")
+            savedAlertMessage = format + "\n\nThese lines were not understood:\n\n" + offending
+            showSavedAlert = true
+            return
+        }
+        let gatewayHost = OpenConnectProcess.extractHost(from: config.gateway)
+        let dangerous = ResolverRule.rulesCapturingGateway(parsed.rules, gatewayHost: gatewayHost)
+        if !dangerous.isEmpty {
+            savedAlertTitle = "DNS rule would lock out the gateway"
+            let names: String = dangerous.map { $0.domain }.joined(separator: ", ")
+            let why: String = "macOS resolves by longest domain suffix, so the gateway's own "
+                + "hostname would be sent to the intranet nameserver too — and that nameserver "
+                + "is only reachable through the tunnel. With the VPN down the gateway would "
+                + "stop resolving and this app could never reconnect."
+            let advice: String = "Use the full hostname you need instead of the parent domain."
+            savedAlertMessage = names + " also covers the VPN gateway " + gatewayHost
+                + ".\n\n" + why + "\n\n" + advice
+            showSavedAlert = true
+            return
+        }
+        config.resolverRules = parsed.rules.isEmpty ? nil : parsed.rules
+
         // Warn before saving, not after: once stored, a full-width ！ is
         // invisible in the masked field and the gateway only ever says 401.
         if !config.suspiciousCredentialFields.isEmpty, !hasConfirmedNonASCII {

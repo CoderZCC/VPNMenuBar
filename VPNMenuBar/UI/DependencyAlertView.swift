@@ -90,6 +90,8 @@ struct DependencyAlertView: View {
                 )
             case .resetVpncScriptPath(let newPath):
                 try DependencyInstaller.resetVpncScriptPath(to: newPath, store: configStore)
+            case .installResolverFiles(let rules, let gatewayHost):
+                try await ResolverFileManager.install(rules: rules, gatewayHost: gatewayHost)
             }
         } catch DependencyInstallError.userCancelled {
             // silent

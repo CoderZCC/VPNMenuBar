@@ -1,6 +1,6 @@
 import Foundation
 
-enum DependencyID: String { case homebrew, openconnect, sudoersRule, vpncScript }
+enum DependencyID: String { case homebrew, openconnect, sudoersRule, vpncScript, intranetResolvers }
 
 /// A fix action that can be performed inside the app, vs. the existing
 /// copyable-command escape hatch (`fixCommand`). When non-nil, the
@@ -11,6 +11,7 @@ enum InAppFix: Equatable {
     case installOpenconnect(brewPath: String, upgrade: Bool)
     case configureSudoers(username: String, openconnectPath: String)
     case resetVpncScriptPath(to: String)
+    case installResolverFiles(rules: [ResolverRule], gatewayHost: String)
 }
 
 struct DependencyStatus: Equatable {
@@ -20,6 +21,13 @@ struct DependencyStatus: Equatable {
     let fixHint: String
     let fixCommand: String?
     let inAppFix: InAppFix?
+    /// True for a dependency that is worth surfacing but must NOT stop a
+    /// connect. The intranet resolver files are the case this exists for:
+    /// the tunnel has always worked without them, and the nameserver they
+    /// point at is only reachable THROUGH the tunnel, so blocking the
+    /// connect on them inverts cause and effect — and would leave a user
+    /// who typed one rule unable to connect at all.
+    let isAdvisory: Bool
     /// True when the probe never ran because a prerequisite dependency failed.
     /// Still `passed == false` (the UI keeps treating it as unmet), but the log
     /// summary renders it as `skip` so it doesn't read as an independent failure.
@@ -31,7 +39,8 @@ struct DependencyStatus: Equatable {
          fixHint: String,
          fixCommand: String?,
          inAppFix: InAppFix?,
-         isSkipped: Bool = false) {
+         isSkipped: Bool = false,
+         isAdvisory: Bool = false) {
         self.id = id
         self.passed = passed
         self.detail = detail
@@ -39,6 +48,7 @@ struct DependencyStatus: Equatable {
         self.fixCommand = fixCommand
         self.inAppFix = inAppFix
         self.isSkipped = isSkipped
+        self.isAdvisory = isAdvisory
     }
 }
 
@@ -60,7 +70,8 @@ class DependencyChecker {
         let openconnect = checkOpenconnect(config: config, homebrewPassed: homebrew.passed)
         let sudoers = checkSudoersRule(config: config, openconnectPassed: openconnect.passed)
         let vpnc = checkVpncScript(config: config)
-        return [homebrew, openconnect, sudoers, vpnc]
+        let resolvers = checkResolverFiles(config: config)
+        return [homebrew, openconnect, sudoers, vpnc, resolvers]
     }
 
     // MARK: - individual checks
@@ -252,6 +263,86 @@ class DependencyChecker {
                 : "vpnc-script is shipped with the openconnect Homebrew formula. It should live at \(archCorrect) after 'brew install openconnect'. Run 'brew reinstall openconnect' if it is missing.",
             fixCommand: nil,
             inAppFix: resetFix
+        )
+    }
+
+    /// Intranet domains that need their own `/etc/resolver` file.
+    ///
+    /// Passes when there is nothing to do — an empty rule list is the correct
+    /// state for most users, so it must not render as a red row. Fails only
+    /// when configured rules are not yet materialised on disk, or when a rule
+    /// is unsafe to write at all.
+    private func checkResolverFiles(config: VPNConfig) -> DependencyStatus {
+        let rules = config.resolverRules ?? []
+        let gatewayHost = OpenConnectProcess.extractHost(from: config.gateway)
+
+        guard !rules.isEmpty else {
+            return DependencyStatus(
+                id: .intranetResolvers,
+                passed: true,
+                detail: "No intranet DNS rules configured (most users need none)",
+                fixHint: "",
+                fixCommand: nil,
+                inAppFix: nil,
+                isAdvisory: true
+            )
+        }
+
+        // Unsafe rules get NO fix button on purpose: the user has to narrow the
+        // domain themselves, and offering a one-click "fix" for something that
+        // would lock the app out of its own gateway is exactly wrong.
+        let dangerous = ResolverRule.rulesCapturingGateway(rules, gatewayHost: gatewayHost)
+        if !dangerous.isEmpty {
+            let names = dangerous.map { $0.domain }.joined(separator: ", ")
+            return DependencyStatus(
+                id: .intranetResolvers,
+                passed: false,
+                detail: "Unsafe DNS rule: \(names) also covers the gateway \(gatewayHost)",
+                fixHint:
+                    "macOS resolves by longest domain suffix, so this rule would send the gateway's own "
+                    + "hostname to the intranet nameserver too — and that nameserver is only reachable "
+                    + "through the tunnel. With the VPN down the gateway would stop resolving and this app "
+                    + "could never reconnect. Open Settings and replace the domain with the full hostname "
+                    + "you actually need.",
+                fixCommand: nil,
+                inAppFix: nil,
+                isAdvisory: true
+            )
+        }
+
+        let pending = ResolverFileManager.pendingRules(rules)
+        let orphans = ResolverFileManager.orphanedDomains(keeping: rules)
+        if pending.isEmpty && orphans.isEmpty {
+            return DependencyStatus(
+                id: .intranetResolvers,
+                passed: true,
+                detail: "\(rules.count) intranet domain(s) routed to their nameserver via /etc/resolver",
+                fixHint: "",
+                fixCommand: nil,
+                inAppFix: nil,
+                isAdvisory: true
+            )
+        }
+
+        var summary: [String] = []
+        if !pending.isEmpty {
+            summary.append("\(pending.count) rule(s) not installed: " + pending.map { $0.domain }.joined(separator: ", "))
+        }
+        if !orphans.isEmpty {
+            summary.append("\(orphans.count) stale file(s) to remove: " + orphans.joined(separator: ", "))
+        }
+        return DependencyStatus(
+            id: .intranetResolvers,
+            passed: false,
+            detail: summary.joined(separator: "; "),
+            fixHint:
+                "These domains only exist in the intranet DNS, so they cannot be resolved by the public "
+                + "resolver. Click Install DNS rules to write them to /etc/resolver via macOS authorization "
+                + "(TouchID or password). This happens once — the files persist, so connecting needs no "
+                + "further permissions.",
+            fixCommand: nil,
+            inAppFix: .installResolverFiles(rules: rules, gatewayHost: gatewayHost),
+            isAdvisory: true
         )
     }
 

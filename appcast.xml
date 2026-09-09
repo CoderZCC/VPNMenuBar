@@ -6,6 +6,29 @@
     <description>VPN MenuBar update feed</description>
     <language>en</language>
     <item>
+      <title>Version 0.2.18</title>
+      <sparkle:version>20</sparkle:version>
+      <sparkle:shortVersionString>0.2.18</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <p><strong>Makes intranet-only hostnames resolve, without touching your DNS settings.</strong></p>
+        <ul>
+          <li>Some internal hostnames exist only in the company's own DNS server, so a public resolver simply has no record for them and the browser reports that the host does not exist — even while the tunnel itself is perfectly healthy and the same host answers fine by IP address</li>
+          <li>Changing the system DNS setting cannot fix this, because that setting has exactly one winner: point it at the internal server and every public site breaks; point it at a public resolver and the internal names break. Worse, the internal server is usually reachable only through the tunnel, so with the VPN down that setting kills name resolution completely &mdash; including the VPN gateway's own hostname, which leaves the app unable to connect at all</li>
+          <li>Settings &rarr; Intranet DNS rules now takes a list of <code>domain nameserver</code> pairs, and Check Dependencies installs them with a single authorization. Each rule is scoped to that one domain, so everything else keeps using your normal DNS and the global setting is left alone. The files persist, so connecting afterwards needs no further permissions</li>
+          <li>The app refuses to write a rule that would also cover the VPN gateway's own hostname, which would otherwise make reconnecting impossible whenever the VPN is down. Rules you do not recognise are reported rather than silently ignored, and files written by hand or by other tools are never modified or removed</li>
+          <li>Leave this empty unless an internal name genuinely has no public DNS record &mdash; most people need no rules at all</li>
+        </ul>
+      ]]></description>
+      <pubDate>Wed, 09 Sep 2026 16:43:34 +0400</pubDate>
+      <enclosure
+        url="https://github.com/CoderZCC/VPNMenuBar/releases/download/v0.2.18/VPNMenuBar-0.2.18.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="Wr+TjE2e+iY53AfMnD/EM1C9t5IHzGoOKKnXb5bw2lSUlhgInJeby3IVoFpY46h5oIjLCs+v4JSOkSzg5HqHDg=="
+        length="1938446"
+      />
+    </item>
+    <item>
       <title>Version 0.2.17</title>
       <sparkle:version>19</sparkle:version>
       <sparkle:shortVersionString>0.2.17</sparkle:shortVersionString>

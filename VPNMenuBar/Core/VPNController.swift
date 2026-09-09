@@ -191,8 +191,12 @@ final class VPNController: ObservableObject {
             return "\(s.id)=\(verdict)"
         }.joined(separator: " ")
         AppLogger.shared.info("dependency check: \(depsSummary)")
-        if let failed = statuses.first(where: { !$0.passed && !$0.isSkipped })
-            ?? statuses.first(where: { !$0.passed }) {
+        // Advisory rows (the intranet resolver files) are reported but never
+        // block: the tunnel has always worked without them, and the nameserver
+        // they point at is only reachable through that tunnel.
+        let blocking = statuses.filter { !$0.isAdvisory }
+        if let failed = blocking.first(where: { !$0.passed && !$0.isSkipped })
+            ?? blocking.first(where: { !$0.passed }) {
             AppLogger.shared.error("connect blocked — dependency \(failed.id) failed: \(failed.detail)")
             state = .failed(reason: "Dependency not ready: \(failed.detail)")
             return
