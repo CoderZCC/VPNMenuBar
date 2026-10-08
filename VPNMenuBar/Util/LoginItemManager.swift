@@ -3,19 +3,16 @@ import ServiceManagement
 
 /// Manages the "Launch at login" feature.
 ///
-/// The user's preference is stored in UserDefaults so that the default-on behavior
-/// survives a missing SMAppService entry (e.g. after moving the .app bundle) while
-/// still respecting an explicit user opt-out. On first launch (preference key missing)
-/// the default is `true` — the app registers itself as a login item automatically.
+/// Login items are opt-in. Existing explicit preferences remain respected.
 enum LoginItemManager {
     private static let preferenceKey = "launchAtLoginEnabled"
 
-    /// User's stored preference. Defaults to `true` on first launch.
+    /// User's stored preference. Defaults to `false` on first launch.
     static var isEnabledPreference: Bool {
         get {
             let defaults = UserDefaults.standard
             if defaults.object(forKey: preferenceKey) == nil {
-                return true
+                return false
             }
             return defaults.bool(forKey: preferenceKey)
         }

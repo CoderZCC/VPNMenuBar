@@ -1,383 +1,252 @@
 import Foundation
+import Darwin
 
-/// Outcome of the initial handshake phase (first ~5 seconds after start).
 enum OpenConnectHandshake: Equatable {
-    case connected           // stderr showed success keyword and pgrep confirmed
+    case connected
     case failed(reason: String)
 }
 
-/// Abstraction over the long-running openconnect subprocess.
-/// UI / controller code only touches this protocol.
 protocol OpenConnectProcessRunning: AnyObject {
-    /// Start `sudo openconnect ...` and write `password\n` to its stdin.
-    /// `password` may itself contain a newline — openconnect consumes one
-    /// stdin line per password-type form field, so a two-step gateway gets
-    /// "password\notp\n". Returns after the process is spawned (not after
-    /// handshake).
+    func prepare(config: VPNConfig) throws
     func start(config: VPNConfig, password: String) throws
-
-    /// Wait for initial handshake success or failure.
-    /// Returns within `timeout` seconds; does NOT block after success.
     func waitForHandshake(timeout: TimeInterval) async -> OpenConnectHandshake
-
-    /// Is the spawned openconnect still running?
     func isRunning() -> Bool
-
-    /// Tail of the captured stderr (best effort). Used by the watchdog to
-    /// surface the openconnect death reason in the app log when the child
-    /// vanishes after a successful handshake.
     func recentStderrTail(bytes: Int) -> String
-
-    /// Send SIGTERM via `sudo -n pkill -x openconnect`. Idempotent.
     func stop() throws
 }
 
-/// Production implementation — uses real Foundation.Process to run sudo openconnect.
+extension OpenConnectProcessRunning {
+    func prepare(config: VPNConfig) throws { }
+}
+
+/// A single authorized session. Credentials travel through private FIFOs, never
+/// through AppleScript, argv or regular files. Closing control terminates our child.
 final class OpenConnectProcess: OpenConnectProcessRunning {
-    private var process: Process?
-    private var stderrHandle: FileHandle?
-    private var collectedStderr = Data()
-    private let stderrQueue = DispatchQueue(label: "openconnect.stderr")
+    private var session: String?
+    private var control: FileHandle?
+    private var input: FileHandle?
+    private var credentialsSent = false
+    private var output: FileHandle?
+    private var supervisorPID: pid_t?
+    private var collectedOutput = Data()
+    private let outputQueue = DispatchQueue(label: "vpnmenubar.session-output")
 
-    private let processRunner: ProcessRunning
-
-    init(processRunner: ProcessRunning = SystemProcessRunner()) {
-        self.processRunner = processRunner
+    func prepare(config: VPNConfig) throws {
+        try stop()
+        try ManagedRuntime.validateConfiguration(config)
+        let path = try PrivilegedCommand.run(Self.launchCommand(config: config, uid: getuid()))
+        guard Self.isSessionPath(path) else {
+            throw DependencyInstallError.unsupported(reason: "Invalid response from the authorized VPN session.")
+        }
+        session = path
+        guard let text = try? String(contentsOfFile: path + "/supervisor", encoding: .utf8),
+              let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 else {
+            throw DependencyInstallError.unsupported(reason: "The authorized VPN session did not start.")
+        }
+        supervisorPID = pid
+        do {
+            // RDWR prevents FIFO-open deadlocks. Root owns the containing directory.
+            output = try Self.openFIFO(path + "/output")
+            input = try Self.openFIFO(path + "/input")
+            credentialsSent = false
+            control = try Self.openFIFO(path + "/control")
+            outputQueue.sync { collectedOutput = Data() }
+            output?.readabilityHandler = { [weak self] handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                self?.outputQueue.sync {
+                    self?.collectedOutput.append(chunk)
+                    if let count = self?.collectedOutput.count, count > 65_536 {
+                        self?.collectedOutput.removeFirst(count - 65_536)
+                    }
+                }
+            }
+        } catch {
+            try? stop()
+            throw error
+        }
     }
 
     func start(config: VPNConfig, password: String) throws {
-        // Clean up any prior invocation — and WAIT for it to actually die.
-        // A SIGTERM'd openconnect runs vpnc-script's disconnect phase
-        // asynchronously (deleting routes by destination, regardless of
-        // interface). If we spawn the new session before that cleanup
-        // finishes, it deletes the routes the new session just installed,
-        // leaving a live tunnel with an empty routing table.
-        try? stop()
-        let stopDeadline = Date().addingTimeInterval(5)
-        while pgrepOpenConnect() && Date() < stopDeadline {
-            Thread.sleep(forTimeInterval: 0.2)
+        guard let input, session != nil, !credentialsSent, password.utf8.count < 4096 else {
+            throw DependencyInstallError.unsupported(reason: "The VPN session is not ready or credentials are too long.")
         }
-        stderrHandle?.readabilityHandler = nil
-        stderrHandle = nil
-        process = nil
-        collectedStderr = Data()
-
-        // Scrub a leftover host route to the VPN gateway whose nexthop points
-        // at a previous-WiFi gateway. Best-effort: silently no-ops if the
-        // sudoers entry is missing or no stale route is present.
-        cleanupStaleHostRoute(forGateway: config.gateway)
-
-        let scriptPath: String
-        if config.skipDNSModification,
-           let bundled = Bundle.main.path(forResource: "vpnc-script--no-dns", ofType: nil) {
-            scriptPath = bundled
-        } else {
-            scriptPath = config.vpncScriptPath
-        }
-
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        var userAgentArgs: [String] = []
-        if let ua = config.effectiveUserAgent {
-            userAgentArgs = ["--useragent", ua]
-        }
-        p.arguments = [
-            "-n",
-            config.openconnectPath,
-            // Without -v the stderr only carries openconnect's last-resort
-            // message ("Basic authentication is disabled"), which hides the
-            // actual HTTP status that caused it. Cookies are scrubbed before
-            // anything reaches the log file — see redactSecrets.
-            "-v",
-            "--script", scriptPath,
-            "--user", config.username,
-            "--passwd-on-stdin",
-            "--servercert", config.serverCertPin,
-        ] + userAgentArgs + [
-            config.gateway,
-        ]
-
-        let stdinPipe = Pipe()
-        let stderrPipe = Pipe()
-        p.standardInput = stdinPipe
-        // openconnect writes its -v HTTP trace to stdout, not stderr. Both are
-        // merged into one pipe so the trace is captured alongside the error
-        // line it explains; discarding stdout made -v useless in v0.2.9.
-        p.standardOutput = stderrPipe
-        p.standardError = stderrPipe
-
-        try p.run()
-        AppLogger.shared.info("openconnect spawned, argv: \((p.arguments ?? []).joined(separator: " "))")
-        // A two-step gateway asks for a second auth form; if we fed it only one
-        // stdin line openconnect hits EOF and falls back to HTTP Basic, whose
-        // "basic auth disabled" error looks nothing like the real cause.
-        AppLogger.shared.info("writing \(password.split(separator: "\n", omittingEmptySubsequences: false).count) stdin line(s) to openconnect")
-        stdinPipe.fileHandleForWriting.write((password + "\n").data(using: .utf8) ?? Data())
-        try? stdinPipe.fileHandleForWriting.close()
-
-        stderrHandle = stderrPipe.fileHandleForReading
-        stderrHandle?.readabilityHandler = { [weak self] handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty {
-                handle.readabilityHandler = nil
-                return
-            }
-            self?.stderrQueue.sync {
-                self?.collectedStderr.append(chunk)
-            }
-        }
-        self.process = p
+        try input.write(contentsOf: Data((password + "\n").utf8))
+        // Keep the FIFO open until stop: closing before the root reader opens it loses buffered bytes.
+        credentialsSent = true
+        AppLogger.shared.info("Authorized VPN session started")
     }
 
     func waitForHandshake(timeout: TimeInterval) async -> OpenConnectHandshake {
-        let successMarkers = [
-            "Connected as",
-            "CSTP connected",
-            "Established DTLS",
-            "ESP session established",
-        ]
-        let failureMarkers = [
-            "Login failed",
-            "authentication failure",
-            "sudo: a password is required",
-            "Certificate verification failure",
-            "wrong otp value",
-            "wrong otp pin",
-        ]
-
-        let startTime = Date()
-        let gracePeriod: TimeInterval = 1.5
-
-        while Date().timeIntervalSince(startTime) < timeout {
-            guard let p = process else {
-                return .failed(reason: "openconnect process not started")
-            }
-
-            let stderrText = stderrQueue.sync {
-                String(data: collectedStderr, encoding: .utf8) ?? ""
-            }
-
-            // Explicit failure keywords — return immediately.
-            for marker in failureMarkers where stderrText.contains(marker) {
-                let reason = mapFailureMarker(marker, fullStderr: stderrText)
-                dumpStderrForDiagnosis(stderrText, context: "matched marker \"\(marker)\"")
-                return .failed(reason: reason)
-            }
-
-            // Process already exited during handshake phase → failure.
-            if !p.isRunning {
-                let reason = meaningfulTail(stderrText)
-                dumpStderrForDiagnosis(stderrText, context: "openconnect exited during handshake")
-                return .failed(reason: reason.isEmpty ? "openconnect exited before handshake" : reason)
-            }
-
-            // Success keyword + our child still alive → connected.
-            let keywordHit = successMarkers.contains { stderrText.contains($0) }
-            let gracePassed = Date().timeIntervalSince(startTime) >= gracePeriod
-            if p.isRunning && (keywordHit || gracePassed) && pgrepOpenConnect() {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let text = snapshot()
+            if let reason = Self.failureReason(text) { return .failed(reason: reason) }
+            guard isRunning() else { return .failed(reason: "VPN process exited before the tunnel was established.") }
+            if ["Connected as", "CSTP connected", "Established DTLS", "ESP session established"].contains(where: text.contains) {
                 return .connected
             }
-
-            try? await Task.sleep(nanoseconds: 250_000_000) // 250ms
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
-
-        // Timeout.
-        let stderrText = stderrQueue.sync {
-            String(data: collectedStderr, encoding: .utf8) ?? ""
-        }
-        let reason = meaningfulTail(stderrText)
-        dumpStderrForDiagnosis(stderrText, context: "handshake timeout")
-        return .failed(reason: reason.isEmpty ? "Handshake timeout" : reason)
+        return .failed(reason: "VPN handshake timed out. Check the gateway settings or contact your VPN administrator.")
     }
 
     func isRunning() -> Bool {
-        pgrepOpenConnect()
+        guard let session, let pid = supervisorPID,
+              !FileManager.default.fileExists(atPath: session + "/status") else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
     }
 
     func recentStderrTail(bytes: Int) -> String {
-        let stderrText = stderrQueue.sync {
-            String(data: collectedStderr, encoding: .utf8) ?? ""
-        }
-        return tailOfStderr(stderrText, bytes: bytes)
+        // Only fixed classifications leave the in-memory output buffer.
+        Self.failureReason(snapshot()) ?? "VPN process ended."
     }
 
     func stop() throws {
-        _ = try? processRunner.run(
-            executable: "/usr/bin/sudo",
-            arguments: ["-n", "/usr/bin/pkill", "-x", "openconnect"],
-            timeoutSeconds: 3
-        )
-        process = nil
-    }
-
-    // MARK: - helpers
-
-    private func pgrepOpenConnect() -> Bool {
-        let result = try? processRunner.run(
-            executable: "/usr/bin/pgrep",
-            arguments: ["-x", "openconnect"],
-            timeoutSeconds: 2
-        )
-        return result?.succeeded ?? false
-    }
-
-    /// Dump the full captured openconnect stderr to the system log so the
-    /// user can inspect the raw output (e.g. the actual server pin-sha256,
-    /// cert subject/issuer) via Console.app — the UI reason string is kept
-    /// short on purpose.
-    private func dumpStderrForDiagnosis(_ stderrText: String, context: String) {
-        let trimmed = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            AppLogger.shared.error("openconnect failed (\(context)), stderr was empty")
-            return
+        // EOF is the sole control message; no executable, script or PID comes from the client.
+        try? control?.close()
+        control = nil
+        try? input?.close()
+        input = nil
+        let deadline = Date().addingTimeInterval(15)
+        while isRunning() && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
+        guard !isRunning() else {
+            throw DependencyInstallError.unsupported(reason: "The VPN is still stopping. Retry before starting another connection.")
         }
-        AppLogger.shared.error("openconnect failed (\(context)). Full stderr:\n\(redactSecrets(trimmed))")
+        output?.readabilityHandler = nil
+        try? output?.close()
+        output = nil
+        session = nil
+        supervisorPID = nil
+        outputQueue.sync { collectedOutput = Data() }
     }
 
-    /// -v makes openconnect echo session cookies; those are bearer credentials
-    /// and must never reach the log file the user mails around for support.
-    private func redactSecrets(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line -> String in
-                let lower = line.lowercased()
-                guard lower.hasPrefix("set-cookie:") || lower.hasPrefix("cookie:") else {
-                    return String(line)
-                }
-                guard let colon = line.firstIndex(of: ":"),
-                      let equals = line[line.index(after: colon)...].firstIndex(of: "=") else {
-                    return String(line[...(line.firstIndex(of: ":") ?? line.startIndex)]) + " <redacted>"
-                }
-                return String(line[...equals]) + "<redacted>"
-            }
-            .joined(separator: "\n")
+    private func snapshot() -> String {
+        outputQueue.sync { String(decoding: collectedOutput, as: UTF8.self) }
     }
 
-    /// Lines that -v adds to the raw HTTP trace. They carry the diagnosis in the
-    /// log file but would bury the human-readable error in the menu's status row.
-    private static let tracePrefixes = [
-        "POST ", "GET ", "Got HTTP response", "HTTP body length", "Set-Cookie",
-        "Cookie:", "Content-", "X-", "Attempting to connect", "Connected to",
-        "SSL negotiation", "XML POST", "OK to generate", "Generating ",
-        "Connection: ", "Transfer-Encoding",
-    ]
-
-    /// Last few non-trace lines — what the user actually sees as the reason.
-    private func meaningfulTail(_ text: String, maxLines: Int = 3) -> String {
-        let lines = text
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { line in
-                !line.isEmpty && !Self.tracePrefixes.contains { line.hasPrefix($0) }
-            }
-        return lines.suffix(maxLines).joined(separator: "\n")
-    }
-
-    private func tailOfStderr(_ text: String, bytes: Int) -> String {
-        guard text.count > bytes else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let start = text.index(text.endIndex, offsetBy: -bytes)
-        return String(text[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func mapFailureMarker(_ marker: String, fullStderr: String) -> String {
-        switch marker {
-        case "Login failed", "authentication failure":
-            return "Authentication failed — please check your TOTP secret or password prefix."
-        case "sudo: a password is required":
-            return "sudo is prompting for a password. Configure NOPASSWD in visudo."
-        case "Certificate verification failure":
-            return "Server certificate verification failed. The gateway cert may have rotated — update the pin in Settings → Advanced."
-        case "wrong otp value", "wrong otp pin":
-            return "OTP rejected by server. Verify your authenticator code matches the server's expectation. If your secret and time are correct, the token may have been disabled — contact IT to reset it."
-        default:
-            return tailOfStderr(fullStderr, bytes: 200)
+    static func failureReason(_ text: String) -> String? {
+        if text.contains("Certificate verification failure") {
+            return "Server certificate verification failed. Check the configured certificate pin."
         }
-    }
-
-    // MARK: - pre-connect host-route cleanup
-
-    /// Delete the cached host route to the VPN gateway before spawning
-    /// openconnect — ONLY when a dedicated host route actually exists. If no
-    /// such route is present `/sbin/route get` falls through to the default
-    /// route and reports `destination: default`; in that case we MUST NOT
-    /// run a delete (that would wipe the system default route and kill all
-    /// networking). A dedicated host route always has a concrete IPv4 as its
-    /// destination, so we gate the delete on that.
-    ///
-    /// Called at the top of `start()` — no active tunnel exists at that
-    /// point, so deleting a concrete host route is safe: a correct one is
-    /// rebuilt by the kernel on the next packet; a stale one is what we want
-    /// gone. Best-effort — failures are logged and openconnect proceeds.
-    private func cleanupStaleHostRoute(forGateway gateway: String) {
-        let host = Self.extractHost(from: gateway)
-        guard !host.isEmpty else { return }
-
-        // Route lookup (does its own DNS resolution).
-        let hostRoute = (try? processRunner.run(
-            executable: "/sbin/route",
-            arguments: ["-n", "get", host],
-            timeoutSeconds: 2
-        )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
-        guard hostRoute.succeeded,
-              let destinationIP = Self.parseRouteField("destination", from: hostRoute.stdout) else {
-            return
-        }
-
-        // Critical safety guard: only delete when destination is a concrete
-        // IPv4 address. If it's "default" (or any other non-IP literal) we
-        // hit fall-through to the default route and deleting would kill the
-        // box's entire network.
-        guard Self.isConcreteIPv4(destinationIP) else {
-            AppLogger.shared.info("pre-connect: no dedicated host route for \(host) (got destination=\(destinationIP)) — skipping flush")
-            return
-        }
-
-        let currentGateway = Self.parseRouteField("gateway", from: hostRoute.stdout) ?? "?"
-        AppLogger.shared.info("pre-connect: flushing cached route to \(destinationIP) (was via \(currentGateway))")
-
-        let result = (try? processRunner.run(
-            executable: "/usr/bin/sudo",
-            arguments: ["-n", "/sbin/route", "-n", "delete", destinationIP],
-            timeoutSeconds: 3
-        )) ?? ProcessResult(exitCode: -1, stdout: "", stderr: "")
-        if !result.succeeded {
-            AppLogger.shared.error("pre-connect route flush failed (sudoers may be missing /sbin/route — re-run install-deps.sh): \(result.stderr)")
-        }
-    }
-
-    /// Strict dotted-quad IPv4 check (0-255 per octet). Used as a safety gate
-    /// so `route get` fall-through sentinels like "default" never reach the
-    /// delete path.
-    private static func isConcreteIPv4(_ s: String) -> Bool {
-        let parts = s.split(separator: ".")
-        guard parts.count == 4 else { return false }
-        return parts.allSatisfy { part in
-            guard let n = Int(part), n >= 0, n <= 255 else { return false }
-            return true
-        }
-    }
-
-    /// Strip optional `https://` scheme and any `:port` / `/path` suffix
-    /// from a gateway string, leaving just the host.
-    static func extractHost(from gateway: String) -> String {
-        var s = gateway.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }
-        if let i = s.firstIndex(where: { $0 == "/" || $0 == ":" }) {
-            s = String(s[..<i])
-        }
-        return s
-    }
-
-    /// Parse a `field: value` line out of `route -n get` output (the field
-    /// is preceded by variable indentation).
-    private static func parseRouteField(_ field: String, from output: String) -> String? {
-        let prefix = "\(field):"
-        for line in output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix(prefix) {
-                let value = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-                return value.isEmpty ? nil : value
-            }
+        if ["Login failed", "authentication failure", "wrong otp value", "wrong otp pin"].contains(where: text.contains) {
+            return "VPN authentication failed. Check credentials and device time with your administrator."
         }
         return nil
+    }
+
+    static func isSessionPath(_ path: String) -> Bool {
+        let prefix = "/var/run/vpnmenubar."
+        return path.hasPrefix(prefix) && path.count > prefix.count
+            && path.dropFirst(prefix.count).allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
+    }
+
+    private static func openFIFO(_ path: String) throws -> FileHandle {
+        let fd = open(path, O_RDWR | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFIFO,
+              info.st_uid == getuid(), (info.st_mode & 0o777) == 0o600 else {
+            close(fd)
+            throw POSIXError(.EPERM)
+        }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    static func launchCommand(config: VPNConfig, uid: uid_t) -> String {
+        let q = PrivilegedCommand.quote
+        // OpenConnect evaluates --script with sh -c, after the outer shell parses argv.
+        var arguments = ["--script", "./vpnc-script--no-dns",
+                         "--user", config.username, "--passwd-on-stdin", "--servercert", config.serverCertPin]
+        if let agent = config.effectiveUserAgent { arguments += ["--useragent", agent] }
+        arguments += ["--", config.gateway]
+        let invocation = arguments.map(q).joined(separator: " ")
+        let supervisor = """
+        session="$1"
+        terminate_owned() {
+          if [ -n "$1" ] && [ "$(/bin/ps -p "$1" -o ppid= | /usr/bin/tr -d ' ')" = "$$" ]; then
+            /bin/kill -TERM "$1" 2>/dev/null || true
+          fi
+        }
+        cleanup() {
+          trap '' TERM INT HUP
+          # Preserve the session until the VPN has exited and run its disconnect script.
+          terminate_owned "${control_reader:-}"
+          terminate_owned "${child:-}"
+          terminate_owned "${startup_watch:-}"
+          terminate_owned "${status_timer:-}"
+          for worker in ${child:-} ${control_reader:-} ${startup_watch:-} ${status_timer:-}; do
+            wait "$worker" 2>/dev/null || true
+          done
+          /bin/rm -rf "$session"
+        }
+        trap cleanup EXIT
+        trap 'exit 0' TERM INT HUP
+        # A client that disappears before attaching must not leave a privileged worker.
+        ( timer=
+          trap '/bin/kill "$timer" 2>/dev/null || true; wait "$timer" 2>/dev/null || true' EXIT
+          trap 'exit 0' TERM INT HUP
+          remaining=60
+          while [ ! -e "$session/attached" ] && [ "$remaining" -gt 0 ]; do
+            /bin/sleep 1 & timer=$!
+            wait "$timer"
+            timer=
+            remaining=$((remaining - 1))
+          done
+          if [ ! -e "$session/attached" ]; then /bin/kill -TERM "$$"; fi
+        ) &
+        startup_watch=$!
+        exec 3<"$session/control"
+        /usr/bin/touch "$session/attached"
+        # Let the watchdog observe attachment; signal cancellation can race its traps.
+        wait "$startup_watch" 2>/dev/null || true
+        startup_watch=
+        cd "$session/runtime" || exit 1
+        /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/var/root GNUTLS_SYSTEM_PRIORITY_FILE=/dev/null P11_KIT_NO_USER_CONFIG=1 ./openconnect \(invocation) <"$session/input" >"$session/output" 2>&1 3<&- &
+        child=$!
+        ( IFS= read -r ignored <&3 || true
+          if [ "$(/bin/ps -p "$child" -o ppid= | /usr/bin/tr -d ' ')" = "$$" ]; then /bin/kill -TERM "$child" 2>/dev/null || true; fi
+        ) &
+        control_reader=$!
+        wait "$child"
+        status=$?
+        child=
+        /bin/kill "$control_reader" 2>/dev/null || true
+        wait "$control_reader" 2>/dev/null || true
+        control_reader=
+        /bin/echo "$status" > "$session/status"
+        # Keep a brief status window for the client, then remove only this root-created directory.
+        /bin/sleep 30 &
+        status_timer=$!
+        wait "$status_timer"
+        status_timer=
+        """
+        return "set -eu\nexport PATH=/usr/bin:/bin:/usr/sbin:/sbin\nunset DYLD_LIBRARY_PATH DYLD_INSERT_LIBRARIES DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH\n" + DependencyInstaller.legacyRemovalCommand(username: NSUserName()) + "\n" + """
+        umask 077
+        if [ ! -e /var/run/vpnc ]; then /bin/mkdir -m 755 /var/run/vpnc; fi
+        [ -d /var/run/vpnc ] && [ ! -L /var/run/vpnc ] || exit 40
+        [ "$(/usr/bin/stat -f %u /var/run/vpnc)" = 0 ] || exit 41
+        mode=$(/usr/bin/stat -f %Lp /var/run/vpnc)
+        [ $((0$mode & 022)) -eq 0 ] || exit 42
+        case "$(/bin/ls -lde /var/run/vpnc | /usr/bin/awk '{print $1}')" in *+*) exit 43;; esac
+        session=$(/usr/bin/mktemp -d /var/run/vpnmenubar.XXXXXXXX)
+        trap '/bin/rm -rf "$session"' EXIT
+        \(ManagedRuntime.stagingCommand)
+        /usr/bin/mkfifo "$session/input" "$session/output" "$session/control"
+        /usr/sbin/chown \(uid) "$session/input" "$session/output" "$session/control"
+        /bin/chmod 600 "$session/input" "$session/output" "$session/control"
+        /bin/chmod 711 "$session"
+        # Authorization ignores and blocks SIGTERM; restore dispositions and the inherited mask.
+        /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/perl -MPOSIX -e 'for (qw(HUP INT TERM PIPE)) { $SIG{$_} = "DEFAULT" } defined(POSIX::sigprocmask(POSIX::SIG_SETMASK(), POSIX::SigSet->new())) or exit 126; exec @ARGV; exit 127' /bin/sh -c \(q(supervisor)) VPNMenuBar-session "$session" </dev/null >/dev/null 2>&1 &
+        /bin/echo "$!" > "$session/supervisor"
+        /bin/chmod 644 "$session/supervisor"
+        trap - EXIT
+        /bin/echo "$session"
+        """
+    }
+
+    static func extractHost(from gateway: String) -> String {
+        let value = gateway.contains("://") ? gateway : "https://" + gateway
+        return URLComponents(string: value)?.host ?? ""
     }
 }

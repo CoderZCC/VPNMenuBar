@@ -1,25 +1,24 @@
 name: VPNMenuBar
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: io.coderzcc
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
 
-packages:
-  Sparkle:
-    url: https://github.com/sparkle-project/Sparkle
-    from: "2.6.0"
-
 settings:
   base:
+    ARCHS: "$(NATIVE_ARCH_ACTUAL)"
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "13.0"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
-    CODE_SIGNING_REQUIRED: NO
-    CODE_SIGNING_ALLOWED: NO
-    ENABLE_HARDENED_RUNTIME: NO
+    CODE_SIGNING_REQUIRED: YES
+    CODE_SIGNING_ALLOWED: YES
+    ENABLE_HARDENED_RUNTIME: YES
     ENABLE_APP_SANDBOX: NO
+  configs:
+    Release:
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
 
 targets:
   VPNMenuBar:
@@ -29,28 +28,35 @@ targets:
       - path: VPNMenuBar
         excludes:
           - "Resources/**"
-      - path: VPNMenuBar/Resources/vpnc-script--no-dns
+      - path: VPNMenuBar/Resources/BundledRuntime
+        type: folder
         buildPhase: resources
+      - path: VPNMenuBar/Resources/ThirdParty
+        type: folder
+        buildPhase: resources
+    preBuildScripts:
+      - name: Verify bundled runtime
+        script: |
+          set -eu
+          /usr/bin/env python3 "$SRCROOT/scripts/runtime-package.py" "$SRCROOT"
+          for arch in $ARCHS; do
+            /usr/bin/lipo "$SRCROOT/VPNMenuBar/Resources/BundledRuntime/openconnect" -verify_arch "$arch"
+          done
+        basedOnDependencyAnalysis: false
     info:
       path: VPNMenuBar/Info.plist
       properties:
         CFBundleName: VPNMenuBar
         CFBundleDisplayName: VPN MenuBar
-        CFBundleShortVersionString: "0.2.19"
-        CFBundleVersion: "21"
+        CFBundleShortVersionString: "0.2.24"
+        CFBundleVersion: "26"
         LSMinimumSystemVersion: "13.0"
         LSUIElement: true
         NSUserNotificationAlertStyle: alert
         NSHumanReadableCopyright: "Personal use only"
-        SUFeedURL: "https://raw.githubusercontent.com/CoderZCC/VPNMenuBar/main/appcast.xml"
-        SUPublicEDKey: "cyiD6I9dAeSGGdVG2VAADG9ecdvdLHDHBIFfnjR9zJY="
-        SUEnableAutomaticChecks: true
-    dependencies:
-      - package: Sparkle
-        product: Sparkle
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.vpnmenubar
+        PRODUCT_BUNDLE_IDENTIFIER: io.coderzcc.vpnmenubar
         INFOPLIST_FILE: VPNMenuBar/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 

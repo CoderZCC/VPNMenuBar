@@ -1,4 +1,5 @@
 import SwiftUI
+import Security
 
 struct SettingsView: View {
     @ObservedObject var controller: VPNController
@@ -8,6 +9,11 @@ struct SettingsView: View {
     @State private var originalConfig: VPNConfig = VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
     @State private var launchAtLogin: Bool = LoginItemManager.isEnabledPreference
     @State private var autoConnectOnLaunch: Bool = AutoConnectPreference.isEnabled
+    @State private var configurationUnreadable = false
+    @State private var showRecoveryConfirmation = false
+    @State private var configLoaded = false
+    @State private var credentialsMissing = false
+    @State private var replacingMissingCredentials = false
     @State private var showSavedAlert: Bool = false
     @State private var showNonASCIIWarning: Bool = false
     @State private var nonASCIIWarningMessage: String = ""
@@ -23,12 +29,12 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Required") {
-                TextField("Gateway", text: $config.gateway)
-                TextField("Server cert pin", text: $config.serverCertPin)
-                TextField("Username", text: $config.username)
-                RevealableSecureField(title: "Password prefix", text: $config.passwordPrefix)
-                RevealableSecureField(title: "TOTP secret (Base32)", text: $config.totpSecret)
+            Section("Connection details") {
+                TextField("Gateway", text: $config.gateway, prompt: Text("vpn.company.com"))
+                TextField("Server cert pin", text: $config.serverCertPin, prompt: Text("pin-sha256:… from your VPN administrator"))
+                TextField("Username", text: $config.username, prompt: Text("Your VPN account username"))
+                RevealableSecureField(title: "Password prefix", text: $config.passwordPrefix, placeholder: "VPN password, without the one-time code")
+                RevealableSecureField(title: "TOTP secret (Base32)", text: $config.totpSecret, placeholder: "Setup key, not the 6-digit code")
                 HStack {
                     ImportSecretFromImageButton(secret: $config.totpSecret, username: $config.username)
                     Spacer()
@@ -40,9 +46,7 @@ struct SettingsView: View {
                        ))
             }
 
-            Section("Advanced") {
-                TextField("openconnect path", text: $config.openconnectPath)
-                TextField("vpnc-script path", text: $config.vpncScriptPath)
+            Section("Gateway compatibility") {
                 // Kept as a .help tooltip rather than a caption Text: a wrapping
                 // label in this Section made NSHostingController throw while
                 // sizing the window (v0.2.10 crashed on opening Settings).
@@ -50,10 +54,9 @@ struct SettingsView: View {
                 TextField("User-Agent", text: Binding(
                     get: { config.userAgent ?? VPNConfig.defaultUserAgent },
                     set: { config.userAgent = $0 }
-                ))
-                .help("Some gateways only serve the OTP form to the official Cisco client and reject openconnect's own User-Agent with a 401. Leave empty to send openconnect's default.")
-                Toggle("Skip DNS modification (use bundled vpnc-script--no-dns)",
-                       isOn: $config.skipDNSModification)
+                ), prompt: Text("Optional — leave empty unless required"))
+                .help("Leave empty to use openconnect's native User-Agent. Set an override only if approved by your VPN administrator.")
+
             }
 
             Section("Intranet DNS rules") {
@@ -100,7 +103,7 @@ struct SettingsView: View {
                         + "actually internal: a parent domain also captures every host beneath it, "
                         + "including the VPN gateway itself, which would make reconnecting impossible "
                         + "while the VPN is down. Leave this empty unless an intranet name genuinely "
-                        + "has no public DNS record. Install the files from Check Dependencies."
+                        + "has no public DNS record. Save these settings to apply the rules."
                     )
             }
 
@@ -128,9 +131,9 @@ struct SettingsView: View {
             Section {
                 HStack {
                     Spacer()
-                    Button("Save") { save() }
+                    Button(originalConfig.isConfigured ? "Save" : "Save & Connect") { save() }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(!hasChanges)
+                        .disabled(!configLoaded || !hasChanges || !config.isConfigured)
                 }
             }
         }
@@ -138,9 +141,22 @@ struct SettingsView: View {
         .frame(width: 640)
         .onAppear(perform: load)
         .alert(savedAlertTitle, isPresented: $showSavedAlert) {
+            if !configLoaded { Button("Retry") { load() } }
+            if configurationUnreadable {
+                Button("Reconfigure…") { showRecoveryConfirmation = true }
+            }
+            if credentialsMissing {
+                Button("Re-enter Credentials") { prepareCredentialRecovery() }
+            }
             Button("OK", role: .cancel) { }
         } message: {
             Text(savedAlertMessage)
+        }
+        .alert("Reconfigure VPN?", isPresented: $showRecoveryConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reconfigure", role: .destructive) { recoverConfiguration() }
+        } message: {
+            Text("The unreadable file will be kept locally with owner-only access until you successfully save a new configuration. You will need to enter your VPN settings and credentials again.")
         }
         .alert("Non-ASCII characters in credentials", isPresented: $showNonASCIIWarning) {
             Button("Go Back and Fix", role: .cancel) { }
@@ -160,10 +176,55 @@ struct SettingsView: View {
     }
 
     private func load() {
-        if let existing = (try? configStore.load()) ?? nil {
-            config = existing
-            originalConfig = existing
-            resolverRulesText = ResolverRule.format(existing.resolverRules ?? [])
+        configLoaded = false
+        credentialsMissing = false
+        configurationUnreadable = false
+        replacingMissingCredentials = false
+        do {
+            if let existing = try configStore.load() {
+                config = existing
+                originalConfig = existing
+                resolverRulesText = ResolverRule.format(existing.resolverRules ?? [])
+            }
+            configLoaded = true
+        } catch {
+            credentialsMissing = (error as? CredentialStoreError)?.canReenterCredentials ?? false
+            if case ConfigStoreError.invalidConfiguration = error { configurationUnreadable = true }
+            savedAlertTitle = "Could Not Load Credentials"
+            savedAlertMessage = error.localizedDescription
+            showSavedAlert = true
+        }
+    }
+
+    private func recoverConfiguration() {
+        do {
+            try configStore.recoverUnreadableConfiguration()
+            config = VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
+            originalConfig = config
+            resolverRulesText = ""
+            configurationUnreadable = false
+            replacingMissingCredentials = false
+            configLoaded = true
+        } catch {
+            savedAlertTitle = "Could Not Recover Configuration"
+            savedAlertMessage = error.localizedDescription
+            showSavedAlert = true
+        }
+    }
+
+    private func prepareCredentialRecovery() {
+        do {
+            guard let settings = try configStore.loadSettings() else { return }
+            config = settings
+            originalConfig = settings
+            resolverRulesText = ResolverRule.format(settings.resolverRules ?? [])
+            replacingMissingCredentials = true
+            credentialsMissing = false
+            configLoaded = true
+        } catch {
+            savedAlertTitle = "Could Not Load Settings"
+            savedAlertMessage = error.localizedDescription
+            showSavedAlert = true
         }
     }
 
@@ -214,12 +275,13 @@ struct SettingsView: View {
     }
 
     private func performSave() {
+        guard configLoaded, config.isConfigured else { return }
         do {
-            try configStore.save(config)
+            try configStore.save(config, replacingMissingCredentials: replacingMissingCredentials)
         } catch {
             AppLogger.shared.error("SettingsView save failed: \(error)")
             savedAlertTitle = "Save Failed"
-            savedAlertMessage = "The config file may be read-only — check permissions under ~/Library/Application Support."
+            savedAlertMessage = error.localizedDescription
             showSavedAlert = true
             return
         }
@@ -253,12 +315,12 @@ struct SettingsView: View {
                     try await ResolverFileManager.install(rules: rules, gatewayHost: gatewayHost)
                 } catch DependencyInstallError.userCancelled {
                     // Silent: config is saved, the files simply aren't written.
-                    // The dependency row stays red and either place can retry.
+                    // Saving Settings again retries installation.
                 } catch {
                     // Keep the window open so the alert is actually visible.
                     savedAlertTitle = "DNS rules not installed"
                     savedAlertMessage = error.localizedDescription
-                        + "\n\nEverything else was saved. You can retry from Check Dependencies."
+                        + "\n\nEverything else was saved. Click Save again to retry."
                     showSavedAlert = true
                     return
                 }

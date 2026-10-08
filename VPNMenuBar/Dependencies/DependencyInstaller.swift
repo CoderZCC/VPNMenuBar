@@ -1,267 +1,59 @@
 import Foundation
-import AppKit
 
 enum DependencyInstallError: Error, LocalizedError {
     case userCancelled
-    case shellFailed(stderr: String)
-    case osascriptFailed(message: String)
     case unsupported(reason: String)
-    case nothingToUpgrade
     case configIO(underlying: Error)
 
     var errorDescription: String? {
         switch self {
-        case .userCancelled:
-            return "Cancelled."
-        case .shellFailed(let s):
-            return s.isEmpty ? "Shell command failed." : s
-        case .osascriptFailed(let m):
-            return m
-        case .unsupported(let r):
-            return r
-        case .nothingToUpgrade:
-            return "Homebrew reports openconnect is already the newest version, so the upgrade changed nothing "
-                + "and the broken library link is still there. Homebrew has not yet published a build against "
-                + "the new dependency. Either wait for the formula to be updated and try again, or rebuild from "
-                + "source in Terminal (takes several minutes):\n\nbrew reinstall --build-from-source openconnect"
-        case .configIO(let e):
-            return "Config I/O failed: \(e.localizedDescription)"
+        case .userCancelled: return "Authorization cancelled."
+        case .unsupported(let reason): return reason
+        case .configIO: return "The configuration could not be updated. Check Settings and local storage permissions."
         }
     }
 }
 
-/// Stateless namespace exposing the four fix actions surfaced by
-/// `InAppFix`. UI views invoke these from a dispatcher tied to a
-/// `runningFix` state and an error alert.
 enum DependencyInstaller {
-
-    /// Open Terminal.app and pre-type the official Homebrew installer
-    /// command. Returns immediately. The user runs the command in
-    /// Terminal and comes back to click Recheck.
-    static func openTerminalForHomebrew() throws {
-        AppLogger.shared.info("DependencyInstaller: opening Terminal with Homebrew installer command")
-        let installerCmd = "NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-        let escaped = appleScriptEscape(installerCmd)
-        let source = """
-        tell application "Terminal"
-            activate
-            do script "\(escaped)"
-        end tell
-        """
-        do {
-            try runAppleScript(source)
-        } catch {
-            AppLogger.shared.error("DependencyInstaller.openTerminalForHomebrew failed: \(error)")
-            throw error
-        }
-    }
-
-    /// Run `brew install openconnect` (or `brew upgrade openconnect`) as the
-    /// current user via Process. Streams stdout+stderr lines to the progress
-    /// callback. Throws `shellFailed(stderr:)` on non-zero exit.
-    ///
-    /// `upgrade: true` is required when openconnect is installed but cannot start
-    /// because a dependency outgrew its ABI — `install` would report
-    /// "already installed" and exit 0 without fixing anything.
-    static func installOpenconnect(
-        brewPath: String,
-        upgrade: Bool = false,
-        progress: @Sendable @escaping (String) -> Void
-    ) async throws {
-        let subcommand = upgrade ? "upgrade" : "install"
-        AppLogger.shared.info("DependencyInstaller: brew \(subcommand) openconnect starting (brewPath=\(brewPath))")
-        try await Task.detached(priority: .userInitiated) {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: brewPath)
-            p.arguments = [subcommand, "openconnect"]
-
-            // brew needs its own bin dir on PATH so it can find auxiliary tools.
-            let brewDir = (brewPath as NSString).deletingLastPathComponent
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "\(brewDir):/usr/bin:/bin:/usr/sbin:/sbin"
-            env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
-            p.environment = env
-
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            p.standardOutput = outPipe
-            p.standardError = errPipe
-            p.standardInput = FileHandle.nullDevice
-
-            // Accumulate stderr for the failure tail; also forward live lines to UI.
-            let stderrAccum = StderrAccumulator()
-
-            outPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    handle.readabilityHandler = nil
-                    return
-                }
-                if let s = String(data: chunk, encoding: .utf8) {
-                    for line in s.split(separator: "\n") where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                        progress(String(line))
-                    }
-                }
-            }
-            errPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    handle.readabilityHandler = nil
-                    return
-                }
-                stderrAccum.append(chunk)
-                if let s = String(data: chunk, encoding: .utf8) {
-                    for line in s.split(separator: "\n") where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                        progress(String(line))
-                    }
-                }
-            }
-
-            try p.run()
-            p.waitUntilExit()
-            outPipe.fileHandleForReading.readabilityHandler = nil
-            errPipe.fileHandleForReading.readabilityHandler = nil
-
-            if p.terminationStatus != 0 {
-                let stderrText = stderrAccum.snapshotString()
-                let tail = String(stderrText.suffix(400))
-                AppLogger.shared.error("DependencyInstaller: brew \(subcommand) openconnect exited \(p.terminationStatus)\nstderr tail:\n\(tail)")
-                throw DependencyInstallError.shellFailed(
-                    stderr: tail.isEmpty ? "brew \(subcommand) exited \(p.terminationStatus)" : tail
-                )
-            }
-
-            if upgrade && stderrAccum.snapshotString().contains("already installed") {
-                AppLogger.shared.error("DependencyInstaller: brew upgrade openconnect was a no-op — formula not yet rebuilt against the new dependency")
-                throw DependencyInstallError.nothingToUpgrade
-            }
-        }.value
-        AppLogger.shared.info("DependencyInstaller: brew \(subcommand) openconnect succeeded")
-    }
-
-    /// Sanitize a username for use in a /etc/sudoers.d filename.
-    ///
-    /// sudo **silently ignores** any file in `/etc/sudoers.d` whose name contains
-    /// a `.` or ends in `~` (documented in sudoers(5) — it exists to skip editor
-    /// and package-manager backups). An AD-style login like `first.last` would
-    /// otherwise produce a rule that is written correctly, passes `visudo -c`,
-    /// carries the right 0440 root:wheel permissions, and is never loaded —
-    /// `sudo -n` just keeps asking for a password. Only the FILENAME needs this;
-    /// the username inside the rule keeps its dots, which are valid there.
     static func sudoersFilenameComponent(for username: String) -> String {
         String(username.map {
             ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" || $0 == "_" ? $0 : "_"
         })
     }
 
-    /// Write /etc/sudoers.d/vpnmenubar-<sanitized-user> via osascript admin (one TouchID).
-    /// Validates with visudo before installing.
-    static func installSudoersRule(
-        username: String,
-        openconnectPath: String
-    ) async throws {
-        AppLogger.shared.info("DependencyInstaller: installing sudoers rule for \(username) (openconnectPath=\(openconnectPath))")
-        do {
-            try await Task.detached(priority: .userInitiated) {
-                let safeName = sudoersFilenameComponent(for: username)
-                let dest = "/etc/sudoers.d/vpnmenubar-\(safeName)"
-                // A rule installed by an older build under the dotted name is
-                // dead weight sudo was ignoring anyway — remove it.
-                let legacyDest = "/etc/sudoers.d/vpnmenubar-\(safeName == username ? safeName : username)"
-
-                // 1. Build content
-                let content = """
-                # Auto-generated by VPNMenuBar at \(Date())
-                # Grants \(username) passwordless sudo for openconnect, pkill, and route.
-                # Remove this file to revoke: sudo rm \(dest)
-                \(username) ALL=(root) NOPASSWD: \(openconnectPath), /usr/bin/pkill -x openconnect, /sbin/route
-                """
-
-                // 2. Write to a user-owned temp file
-                let tmp = NSTemporaryDirectory() + "vpnmenubar-sudoers-\(UUID().uuidString)"
-                try content.write(toFile: tmp, atomically: true, encoding: .utf8)
-                defer { try? FileManager.default.removeItem(atPath: tmp) }
-
-                // 3. Build privileged shell command
-                var shellCmd = "/usr/sbin/visudo -c -f \"\(tmp)\" && /usr/bin/install -m 440 -o root -g wheel \"\(tmp)\" \"\(dest)\""
-                if legacyDest != dest {
-                    shellCmd += " && /bin/rm -f \"\(legacyDest)\""
-                }
-
-                // 4. Wrap in AppleScript with admin privileges (one TouchID)
-                let asEscaped = appleScriptEscape(shellCmd)
-                let source = """
-                do shell script "\(asEscaped)" with administrator privileges
-                """
-                try runAppleScript(source)
-            }.value
-            AppLogger.shared.info("DependencyInstaller: sudoers rule installed for \(username)")
-        } catch {
-            AppLogger.shared.error("DependencyInstaller.installSudoersRule failed: \(error)")
-            throw error
+    static func legacySudoersPaths(username: String) -> [String] {
+        var names = [sudoersFilenameComponent(for: username)]
+        if !username.isEmpty && username.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) {
+            names.append(username)
         }
+        return Array(Set(names)).sorted().map { "/etc/sudoers.d/vpnmenubar-" + $0 }
     }
 
-    /// Reset the vpncScriptPath in saved config to the architecture-correct
-    /// default. No privilege escalation needed — just a config write.
-    static func resetVpncScriptPath(to newPath: String, store: ConfigStore) throws {
-        AppLogger.shared.info("DependencyInstaller: reset vpncScriptPath to \(newPath)")
-        do {
-            guard var config = try store.load() else {
-                throw DependencyInstallError.unsupported(
-                    reason: "No config to update yet — finish Onboarding first."
-                )
-            }
-            config.vpncScriptPath = newPath
-            try store.save(config)
-        } catch let e as DependencyInstallError {
-            AppLogger.shared.error("DependencyInstaller.resetVpncScriptPath failed: \(e)")
-            throw e
-        } catch {
-            AppLogger.shared.error("DependencyInstaller.resetVpncScriptPath config I/O failed: \(error)")
-            throw DependencyInstallError.configIO(underlying: error)
-        }
+    static func removeLegacySudoers(username: String) async throws {
+        _ = try await Task.detached { try PrivilegedCommand.run(legacyRemovalCommand(username: username)) }.value
     }
 
-    // MARK: - helpers
-
-    private static func appleScriptEscape(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-         .replacingOccurrences(of: "\"", with: "\\\"")
+    static func legacyRemovalCommand(username: String) -> String {
+        let paths = legacySudoersPaths(username: username)
+        return "set -eu\n" + paths.map { path in
+            let q = PrivilegedCommand.quote(path)
+            // Recheck ownership and provenance after authorization; never remove hand-written rules.
+            return """
+            if [ -e \(q) ] || [ -L \(q) ]; then
+                [ ! -L \(q) ] && [ -f \(q) ] || exit 51
+                [ "$(/usr/bin/stat -f %u \(q))" = 0 ] || exit 52
+                /usr/bin/grep -Eq '^# (Auto-generated by VPNMenuBar|Generated by VPNMenuBar|Managed by VPNMenuBar)' \(q) || exit 53
+                /bin/rm \(q)
+            fi
+            """
+        }.joined(separator: "\n") + "\n/usr/sbin/visudo -c >/dev/null"
     }
 
-    /// Execute an AppleScript source string. Maps the well-known cancel
-    /// code (-128) to `userCancelled`; everything else to `osascriptFailed`.
-    private static func runAppleScript(_ source: String) throws {
-        var errorInfo: NSDictionary?
-        guard let script = NSAppleScript(source: source) else {
-            throw DependencyInstallError.osascriptFailed(message: "Could not build AppleScript")
-        }
-        _ = script.executeAndReturnError(&errorInfo)
-        if let info = errorInfo {
-            let code = (info[NSAppleScript.errorNumber] as? Int) ?? 0
-            if code == -128 {
-                throw DependencyInstallError.userCancelled
-            }
-            let msg = (info[NSAppleScript.errorMessage] as? String) ?? "unknown AppleScript error"
-            throw DependencyInstallError.osascriptFailed(message: "\(msg) (code \(code))")
-        }
-    }
-}
-
-/// Tiny mutex-protected wrapper so the Pipe readabilityHandler thread can
-/// append to the stderr accumulator without racing the consumer thread.
-private final class StderrAccumulator: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
-
-    func append(_ chunk: Data) {
-        lock.lock(); defer { lock.unlock() }
-        data.append(chunk)
-    }
-
-    func snapshotString() -> String {
-        lock.lock(); defer { lock.unlock() }
-        return String(data: data, encoding: .utf8) ?? ""
+    static func resetManagedRuntime(store: ConfigStore) throws {
+        guard var config = try store.load() else { return }
+        config.openconnectPath = ManagedRuntime.openconnect
+        config.vpncScriptPath = ManagedRuntime.script
+        config.skipDNSModification = true
+        try store.save(config)
     }
 }

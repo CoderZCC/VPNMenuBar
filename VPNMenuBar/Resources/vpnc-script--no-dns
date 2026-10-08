@@ -85,7 +85,7 @@
 
 # =========== script (variable) setup ====================================
 
-PATH=/sbin:/usr/sbin:$PATH
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 OS="`uname -s`"
 
@@ -211,13 +211,8 @@ fi
 # =========== script hooks =================================================
 
 run_hooks() {
-	HOOK="$1"
-
-	if [ -d ${HOOKS_DIR}/${HOOK}.d ]; then
-		for script in ${HOOKS_DIR}/${HOOK}.d/* ; do
-			[ -f $script ] && . $script
-		done
-	fi
+    # Frozen managed build: never source external hook scripts as root.
+    :
 }
 
 # =========== tunnel interface handling ====================================

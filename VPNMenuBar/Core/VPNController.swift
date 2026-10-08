@@ -5,6 +5,7 @@ import UserNotifications
 @MainActor
 final class VPNController: ObservableObject {
 
+    @Published private(set) var waitingForCredentials = false
     @Published private(set) var state: VPNState = .disconnected
     @Published private(set) var lastDependencyStatuses: [DependencyStatus] = []
 
@@ -63,6 +64,9 @@ final class VPNController: ObservableObject {
     private let handshakeTimeout: TimeInterval
     private let pollInterval: TimeInterval
     private var monitorTask: Task<Void, Never>?
+    private var credentialRetryTask: Task<Void, Never>?
+    private var credentialRetryGeneration = UUID()
+    private let credentialRetryInterval: TimeInterval
 
     /// User's intent flag: true once the user has successfully connected, stays true
     /// across auto-disconnects caused by network loss so we can reconnect when the
@@ -88,8 +92,9 @@ final class VPNController: ObservableObject {
         dependencyChecker: DependencyChecker,
         openConnectProcess: OpenConnectProcessRunning,
         networkMonitor: NetworkMonitoring = NetworkMonitor(),
-        handshakeTimeout: TimeInterval = 5.0,
-        pollInterval: TimeInterval = 2.0
+        handshakeTimeout: TimeInterval = 20.0,
+        pollInterval: TimeInterval = 2.0,
+        credentialRetryInterval: TimeInterval = 5.0
     ) {
         self.configStore = configStore
         self.dependencyChecker = dependencyChecker
@@ -97,6 +102,7 @@ final class VPNController: ObservableObject {
         self.networkMonitor = networkMonitor
         self.handshakeTimeout = handshakeTimeout
         self.pollInterval = pollInterval
+        self.credentialRetryInterval = credentialRetryInterval
     }
 
     /// Wires up the network reachability callback and starts monitoring.
@@ -159,6 +165,7 @@ final class VPNController: ObservableObject {
             AppLogger.shared.warn("connect ignored — an attempt is already in flight")
             return
         }
+        cancelCredentialRetry()
         connectInFlight = true
         defer { connectInFlight = false }
 
@@ -168,18 +175,26 @@ final class VPNController: ObservableObject {
             state = .failed(reason: "Too many failed attempts. Waiting \(wait)s before retrying so the server doesn't ban this IP.")
             return
         }
-        guard let config = (try? configStore.load()), config.isConfigured else {
-            AppLogger.shared.warn("connect aborted — setup incomplete")
-            state = .failed(reason: "Setup incomplete — open Settings to finish configuration.")
+        let config: VPNConfig
+        do {
+            guard let loaded = try configStore.load(), loaded.isConfigured else {
+                state = .failed(reason: "Setup incomplete — open Settings to finish configuration.")
+                return
+            }
+            config = loaded
+        } catch {
+            if let storageError = error as? CredentialStoreError {
+                AppLogger.shared.error("Credential load failed: \(storageError.localizedDescription)")
+            } else {
+                AppLogger.shared.error("Configuration load failed; the existing file was preserved")
+            }
+            state = .failed(reason: error.localizedDescription)
+            if let keychainError = error as? CredentialStoreError, keychainError.isTemporarilyUnavailable {
+                waitForCredentialAccess()
+            }
             return
         }
-        // otpSeparate + secret lengths are logged because a stdin/auth-form
-        // mismatch is indistinguishable from a protocol error in openconnect's
-        // stderr — never log the values themselves.
-        AppLogger.shared.info("config loaded — user=\(config.username) gateway=\(config.gateway) openconnect=\(config.openconnectPath) skipDNS=\(config.skipDNSModification) otpSeparate=\(config.otpSentSeparately ?? false) pwdPrefixLen=\(config.passwordPrefix.count) totpSecretLen=\(config.totpSecret.count) userAgent=\(config.effectiveUserAgent ?? "<openconnect default>")")
-        if let odd = config.nonASCIICredentialSummary {
-            AppLogger.shared.warn("non-ASCII characters in credentials — likely a CJK input-method slip (full-width ！ for !): \(odd)")
-        }
+        AppLogger.shared.info("VPN configuration loaded")
 
         let checker = dependencyChecker
         let statuses = await Task.detached(priority: .userInitiated) {
@@ -203,6 +218,14 @@ final class VPNController: ObservableObject {
         }
 
         state = .connecting
+        let proc = openConnectProcess
+        do {
+            // Authorization can take minutes; generate the OTP only after it completes.
+            try await Task.detached(priority: .userInitiated) { try proc.prepare(config: config) }.value
+        } catch {
+            state = .failed(reason: error.localizedDescription)
+            return
+        }
 
         // Wait out the current TOTP step when it is nearly over (the code could
         // expire in flight) or when we already submitted it (the gateway treats
@@ -222,17 +245,14 @@ final class VPNController: ObservableObject {
             code = try TOTPGenerator.code(secret: config.totpSecret)
         } catch {
             AppLogger.shared.error("TOTP generation failed: \(error)")
+            _ = await Task.detached { try? proc.stop() }.value
             state = .failed(reason: "Invalid TOTP secret — please check Settings.")
             return
         }
-        // The code itself is logged on purpose: comparing it against the
-        // authenticator app at the same instant is the only way to tell a bad
-        // secret apart from a server-side rejection. It expires in <30s, and
-        // the secret that produced it is never logged.
         let now = Date()
         let counter = UInt64(now.timeIntervalSince1970 / TOTPGenerator.step)
         lastSubmittedTOTPCounter = counter
-        AppLogger.shared.info("TOTP generated: code=\(code) counter=\(counter) unixTime=\(UInt64(now.timeIntervalSince1970)) validFor=\(TOTPGenerator.secondsRemainingInStep(at: now))s localTime=\(now)")
+        AppLogger.shared.info("TOTP generated: counter=\(counter) unixTime=\(UInt64(now.timeIntervalSince1970)) validFor=\(TOTPGenerator.secondsRemainingInStep(at: now))s localTime=\(now)")
         // Two-step gateways expect the OTP as a second stdin line (see
         // VPNConfig.otpSentSeparately); classic gateways expect one
         // concatenated password.
@@ -240,14 +260,13 @@ final class VPNController: ObservableObject {
             ? config.passwordPrefix + "\n" + code
             : config.passwordPrefix + code
 
-        let proc = openConnectProcess
         do {
             try await Task.detached(priority: .userInitiated) {
                 try proc.start(config: config, password: password)
             }.value
         } catch {
-            AppLogger.shared.error("openconnect spawn failed: \(error)")
-            state = .failed(reason: "Failed to launch openconnect. Verify the openconnect path in Settings → Advanced.")
+            _ = await Task.detached { try? proc.stop() }.value
+            state = .failed(reason: error.localizedDescription)
             return
         }
 
@@ -267,7 +286,7 @@ final class VPNController: ObservableObject {
             startMonitoring()
         case .failed(let reason):
             AppLogger.shared.error("handshake failed: \(reason)")
-            await logClockOffset()
+
             consecutiveFailures += 1
             if consecutiveFailures >= Self.failuresBeforeCooldown {
                 cooldownUntil = Date().addingTimeInterval(Self.cooldownSeconds)
@@ -290,34 +309,47 @@ final class VPNController: ObservableObject {
         }
     }
 
-    /// Query an NTP server and log how far this Mac's clock has drifted.
-    ///
-    /// A TOTP code is derived from the local clock, so a machine that is more
-    /// than ~30s off generates codes the gateway rejects outright — which is
-    /// indistinguishable from a wrong secret in openconnect's output. Only run
-    /// on failure: it costs a network round trip. `sntp` needs no root as long
-    /// as we don't ask it to set the clock.
-    private func logClockOffset() async {
-        let result = await Task.detached(priority: .utility) { () -> ProcessResult? in
-            try? SystemProcessRunner().run(
-                executable: "/usr/bin/sntp",
-                arguments: ["-t", "3", "time.apple.com"],
-                timeoutSeconds: 5
-            )
-        }.value
-        // sntp writes the offset line to stdout on success but to stderr on
-        // lookup failure — keep both so a failed query is still diagnosable.
-        let text = [result?.stdout, result?.stderr]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " | ")
-        AppLogger.shared.info("clock offset check (sntp): \(text.isEmpty ? "<no output — query failed>" : text)")
+    private func cancelCredentialRetry() {
+        credentialRetryGeneration = UUID()
+        credentialRetryTask?.cancel()
+        credentialRetryTask = nil
+        waitingForCredentials = false
+    }
+
+    /// Probe local storage only. Once available, resume one connection attempt;
+    /// authentication failures never restart this wait.
+    private func waitForCredentialAccess() {
+        waitingForCredentials = true
+        let generation = credentialRetryGeneration
+        let interval = credentialRetryInterval
+        credentialRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000)) }
+                catch { return }
+                guard let self, self.credentialRetryGeneration == generation else { return }
+                guard self.networkReachable else { continue }
+                do {
+                    _ = try self.configStore.load()
+                } catch let error as CredentialStoreError where error.isTemporarilyUnavailable {
+                    continue
+                } catch {
+                    self.cancelCredentialRetry()
+                    self.state = .failed(reason: error.localizedDescription)
+                    return
+                }
+                self.waitingForCredentials = false
+                self.credentialRetryTask = nil
+                await self.connect()
+                return
+            }
+        }
     }
 
     /// User-initiated disconnect. Clears the auto-reconnect intent.
     func disconnect() async {
         AppLogger.shared.info("disconnect() invoked by user")
         shouldAutoReconnect = false
+        cancelCredentialRetry()
         await performDisconnect()
     }
 
@@ -332,11 +364,15 @@ final class VPNController: ObservableObject {
         monitorTask?.cancel()
         monitorTask = nil
         let proc = openConnectProcess
-        _ = await Task.detached(priority: .userInitiated) {
-            try? proc.stop()
-        }.value
-        state = .disconnected
+        do {
+            try await Task.detached(priority: .userInitiated) { try proc.stop() }.value
+            state = .disconnected
+        } catch {
+            state = .failed(reason: error.localizedDescription)
+        }
     }
+
+    var hasActiveProcess: Bool { openConnectProcess.isRunning() }
 
     func reconnect() async {
         await disconnect()
@@ -347,17 +383,6 @@ final class VPNController: ObservableObject {
     /// Per spec §5.3, puts the app into a "Setup incomplete" failed state.
     func markSetupIncomplete() {
         state = .failed(reason: "Setup incomplete — open Settings to finish configuration.")
-    }
-
-    func checkDependencies() -> [DependencyStatus] {
-        // Use saved config when available; otherwise fall back to a default so the
-        // Onboarding dependency step can still probe the default openconnect and
-        // vpnc-script paths before the user has filled in credentials.
-        let config = (try? configStore.load())
-            ?? VPNConfig(username: "", passwordPrefix: "", totpSecret: "")
-        let statuses = dependencyChecker.check(config: config)
-        lastDependencyStatuses = statuses
-        return statuses
     }
 
     // MARK: - Monitoring

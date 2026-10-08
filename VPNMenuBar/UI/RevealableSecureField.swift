@@ -4,6 +4,7 @@ import AppKit
 struct RevealableSecureField: View {
     let title: String
     @Binding var text: String
+    var placeholder: String = ""
 
     @State private var isVisible: Bool = false
 
@@ -12,7 +13,7 @@ struct RevealableSecureField: View {
         // take from TextField(title:) — an NSViewRepresentable can't provide it.
         LabeledContent(title) {
             HStack {
-                ASCIIOnlyTextField(text: $text, isSecure: !isVisible)
+                ASCIIOnlyTextField(text: $text, isSecure: !isVisible, placeholder: placeholder)
                     .id(isVisible)    // swap NSTextField <-> NSSecureTextField
                 Button {
                     isVisible.toggle()
@@ -65,6 +66,7 @@ private final class RomanOnlySecureTextField: NSSecureTextField, RomanInputRestr
 private struct ASCIIOnlyTextField: NSViewRepresentable {
     @Binding var text: String
     let isSecure: Bool
+    let placeholder: String
 
     func makeNSView(context: Context) -> NSTextField {
         let field: NSTextField = isSecure ? RomanOnlySecureTextField() : RomanOnlyTextField()
@@ -76,6 +78,7 @@ private struct ASCIIOnlyTextField: NSViewRepresentable {
         field.controlSize = .regular
         field.font = .systemFont(ofSize: NSFont.systemFontSize(for: .regular))
         field.stringValue = text
+        field.placeholderString = placeholder
         // Match the sizing behaviour of the SwiftUI TextFields around it;
         // without this the Form gives the field its full intrinsic width.
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -84,6 +87,7 @@ private struct ASCIIOnlyTextField: NSViewRepresentable {
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
+        field.placeholderString = placeholder
         if field.stringValue != text {
             field.stringValue = text
         }

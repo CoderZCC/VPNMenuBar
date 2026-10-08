@@ -1,107 +1,52 @@
 # VPN MenuBar
 
-A macOS 13+ status-bar app that wraps OpenConnect for Cisco AnyConnect-compatible VPNs, generates the TOTP one-time code, and lives quietly in your menu bar. Universal Binary, ad-hoc signed, no Developer ID required.
+A macOS 13+ menu-bar front-end for a bundled OpenConnect runtime. This source is being hardened for managed deployment. **It is not a ready-to-distribute release:** production signing, notarization and managed-device acceptance are still pending. The Bundle ID is `io.coderzcc.vpnmenubar`; local builds use ad-hoc signing without a developer account. Historical `.app` and `.zip` files in the repository do not contain these changes.
 
-> ⚠️ **This is a generic OpenConnect front-end.** The default `gateway` (`vpn.example.com`) and `serverCertPin` baked into `VPNConfig.swift` are **placeholders**. You provide your own VPN's hostname, certificate pin, and TOTP secret during the Onboarding wizard (or later in Settings → Advanced).
+## Security and behavior
 
-## Features
+- Password prefixes and TOTP secrets use local AES-256-GCM encryption. Each record has a random key in a separate local file. Records/directories are private (0600/0700); JSON contains only settings and an opaque reference. **A process running as the same user can read both key and ciphertext. This is not Keychain-equivalent protection.**
+- Each VPN session uses macOS system authorization. The app never grants passwordless sudo. Authorization completes before generating the OTP.
+- Credentials travel through private FIFOs, not AppleScript, argv or regular files. Closing the control pipe ends only that session's child. No global process kill or pre-connect arbitrary route deletion is used.
+- OpenConnect, its libraries and the frozen no-DNS script ship inside the App. Compiled SHA-256 hashes are checked before use and again on a private root-owned per-session copy. Disconnect cleanup removes this temporary copy; no runtime or helper is installed in `/Library`. Homebrew and Command Line Tools are not runtime dependencies.
+- Updates are distributed by IT/MDM. Sparkle and the personal GitHub update feed have been removed from the app.
+- Launch at login is opt-in. Explicit existing preferences remain respected. Native OpenConnect User-Agent is the default; overrides require VPN administrator approval.
+- Raw VPN output stays in a bounded memory buffer. Only fixed error classifications leave it. Log files are created with 0600 permissions, retained for three days with daily cleanup, capped at 2 MiB per day, and are not mirrored to system logs.
+- DNS changes remain opt-in, scoped and system-authorized. Unmanaged resolver files and symlinks are rejected. Rules capturing the VPN gateway are refused.
 
-- **One-click in-app dependency installer** — the Onboarding wizard's Dependency Check shows a **Fix** button next to every red item:
-  - **Install Homebrew** — opens Terminal with the official installer pre-typed
-  - **Install openconnect** — runs `brew install openconnect` inside the app, with live progress
-  - **Configure sudoers NOPASSWD rule** — one TouchID via macOS authorization writes the rule to `/etc/sudoers.d/`
-  - **Reset arch-mismatched vpnc-script path** — auto-corrects when an Intel default is loaded on Apple Silicon (or vice versa)
-- **Architecture-aware** — Universal Binary; auto-detects Apple Silicon vs Intel and uses the right Homebrew prefix (`/opt/homebrew` vs `/usr/local`)
-- **TOTP built in** — RFC 6238 HMAC-SHA1 via CryptoKit, with its own Base32 decoder. Optional QR-code import from a screenshot file
-- **Auto-reconnect on network change** — drops the VPN cleanly when WiFi disconnects, reconnects automatically when it comes back (only if you connected manually — failed connects don't loop-retry)
-- **Auto-reconnect after unexpected drops** — if the openconnect process dies while connected (e.g. the session cookie expired after the Mac slept), the app re-authenticates from scratch with a fresh TOTP instead of waiting for a manual reconnect (throttled to once per minute so an unstable gateway isn't hammered)
-- **Intranet DNS rules** — some internal hostnames exist only in the company's own DNS server, so a public resolver has no record for them and the browser says the host doesn't exist while the tunnel is perfectly healthy. The system DNS setting can't fix that (it has one winner: internal names or public ones, never both — and pointing it at a server that lives inside the tunnel kills DNS entirely while the VPN is down). Settings takes a list of `domain nameserver` pairs and installs one `/etc/resolver/<domain>` per rule with a single authorization, scoped to that domain only. The app refuses any rule that would also cover the VPN gateway's own hostname, which would make reconnecting impossible. Most people need no rules at all
-- **Stale host-route cleanup** — scrubs leftover routes from the previous WiFi gateway before each connect, fixing the "Failed to connect after WiFi switch" symptom
-- **Status-bar agent** — `LSUIElement`, no Dock icon, no notification spam
-- **Auto-update** — checks GitHub Releases for new versions via [Sparkle](https://sparkle-project.org/). One-click update from the menu bar
+System authorization may require administrator credentials during automatic reconnect. This version does not promise unattended reconnection. An IT-installed restricted helper would be a separate architecture change.
 
-## Install
+## Build and deploy
 
-### Option A — use the prebuilt .app
+Use [the deployment checklist](docs/security-deployment.md) and [the Chinese setup guide](INSTALL.md). Do not reuse the old ad-hoc release or sudoers recipes.
 
-A ready-to-run `VPNMenuBar.app` is committed in this repo (Universal Binary, ad-hoc signed):
+Build machines need Xcode, XcodeGen, Python 3 and a local OpenConnect build with its libraries. The p11-kit preparation step downloads pinned, hash-verified source archives into `build/` when absent; subsequent packaging is offline and targets the build machine architecture. Ninja is required on the build machine. End-user machines need none of those development dependencies.
 
 ```bash
-git clone https://github.com/CoderZCC/VPNMenuBar.git
-cp -R VPNMenuBar/VPNMenuBar.app /Applications/
-xattr -dr com.apple.quarantine /Applications/VPNMenuBar.app
-open /Applications/VPNMenuBar.app
-```
-
-### Option B — build from source
-
-```bash
-brew install xcodegen
-git clone https://github.com/CoderZCC/VPNMenuBar.git
-cd VPNMenuBar
+python3 scripts/prepare-isolated-p11.py
+python3 scripts/prepare-bundled-runtime.py
 xcodegen generate
 xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar \
-  -configuration Release -destination 'platform=macOS' build
-# The built .app is under ~/Library/Developer/Xcode/DerivedData/...
-# See CLAUDE.md "Build, run, ship" for the full distribution recipe.
+  -configuration Debug -destination 'platform=macOS' \
+  build
 ```
 
-### Option C — download from GitHub Releases
+Local credential storage needs no Keychain entitlement or provisioning profile. The default project uses ad-hoc signing with Hardened Runtime. Managed distribution may still require Developer ID signing, notarization and MDM approval.
 
-Download the latest `VPNMenuBar-x.y.z.zip` from the [Releases](https://github.com/CoderZCC/VPNMenuBar/releases/latest) page:
+`install-deps.sh` explains that no separate runtime installation is needed. It downloads nothing and installs no package manager. Its explicit administrator-only `--remove-legacy-sudoers LOGIN` mode removes only recognized, root-owned, app-generated rules. The app also revokes its recognized old rules during authorized session preparation. Other/custom sudoers policies require IT review.
 
-1. Unzip → drag `VPNMenuBar.app` to `/Applications`
-2. `xattr -dr com.apple.quarantine /Applications/VPNMenuBar.app`
-3. Open the app — subsequent updates will be delivered automatically via the menu bar
+## Configuration and recovery
 
-## First launch
+Settings remain at `~/Library/Application Support/com.example.vpnmenubar/config.json`, mode 0600, to preserve existing installations. Schema 1 plaintext migrates to schema 3 only after encryption and decryption/readback succeed. Records live under `local-credentials/<UUID>/`, containing `key` (32 random bytes) and `sealed` (version header, AES-GCM nonce/ciphertext/tag). The UUID is authenticated as associated data. New saves use a fresh record; old records are removed only after settings commit. Failure preserves the original configuration. External backups and filesystem snapshots are not erased.
 
-Right-click the app in Finder → **Open** → **Open** in the Gatekeeper warning. After that, normal launches work and the login-item registration happens automatically.
+Missing keys are never regenerated for existing ciphertext. Use **Re-enter Credentials** to recover missing or damaged records explicitly. Schema 2 belongs to the previous Keychain design: it requires explicit credential re-entry and is never silently interpreted as a local record. Old Keychain items are not read or deleted. **Reconfigure…** handles damaged settings JSON. Backing up both ciphertext and its key allows recovery on another machine; this storage is not device-bound. Do not downgrade to versions expecting plaintext secrets.
 
-The Onboarding wizard walks you through:
+## Tests
 
-1. **Welcome**
-2. **Dependency Check** — Homebrew, openconnect, sudoers rule, vpnc-script. Click **Fix** on any red row to auto-install
-3. **Credentials** — username, password prefix (from your VPN admin), TOTP secret (Base32 — optional QR-image import button)
-4. **Done**
-
-For the detailed walkthrough including how to extract a TOTP Base32 secret from a QR code image, see **[INSTALL.md](INSTALL.md)** (中文).
-
-## Sudoers rule
-
-If you skip the in-app fix and configure sudo manually, the NOPASSWD rule needs three commands. Run `sudo visudo` and append (replace `<your-user>` with your macOS username):
-
-**Apple Silicon**:
-```
-<your-user> ALL=(root) NOPASSWD: /opt/homebrew/bin/openconnect, /usr/bin/pkill -x openconnect, /sbin/route
+```bash
+bash tests/run-local-credential-tests.sh
+bash tests/run-config-tests.sh
+bash tests/run-controller-tests.sh
+bash tests/run-security-tests.sh
 ```
 
-**Intel**:
-```
-<your-user> ALL=(root) NOPASSWD: /usr/local/bin/openconnect, /usr/bin/pkill -x openconnect, /sbin/route
-```
-
-The third entry (`/sbin/route`) lets the app clean stale host routes after a WiFi switch — without it you'll see "Failed to connect" errors after roaming networks.
-
-## Configuration file
-
-Stored at `~/Library/Application Support/com.example.vpnmenubar/config.json` with `0600` permissions. Plain JSON; contains your username, password prefix, TOTP Base32 secret, gateway, cert pin, and openconnect/vpnc-script paths.
-
-⚠️ **Don't commit `config.json` to git or share it** — the TOTP secret is the seed for your one-time codes and is account-specific.
-
-## Architecture
-
-Single-target SwiftUI app with a strict one-way dependency graph:
-
-```
-UI → Core → Config / Dependencies
-        ↘ Util
-```
-
-`VPNController` is the `@MainActor ObservableObject` state machine; all UI binds to its `@Published state`. Subprocess management is abstracted behind `OpenConnectProcessRunning` so the long-running `sudo openconnect` wrapper is testable in isolation.
-
-See [**CLAUDE.md**](CLAUDE.md) for the full architecture write-up, state machine details, sudoers rationale, quirks list, and distribution recipe.
-
-## Issues & contributions
-
-Open issues or pull requests at <https://github.com/CoderZCC/VPNMenuBar>.
+Tests use synthetic data and temporary directories, including real local encryption/decryption without signing entitlements. The supervisor fixture is unprivileged and does not start a VPN. These checks do not prove system authorization, root lifecycle, real routes/DNS or MDM acceptance.

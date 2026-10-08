@@ -36,7 +36,18 @@ final class SystemProcessRunner: ProcessRunning {
         p.standardInput = FileHandle.nullDevice
 
         try p.run()
-
+        // Drain both pipes while the process runs; authorization errors can include a large command.
+        let stdout = ProcessOutputBuffer()
+        let stderr = ProcessOutputBuffer()
+        let readers = DispatchGroup()
+        for (handle, buffer) in [(outPipe.fileHandleForReading, stdout), (errPipe.fileHandleForReading, stderr)] {
+            readers.enter()
+            DispatchQueue.global(qos: .utility).async {
+                defer { readers.leave() }
+                while let chunk = try? handle.read(upToCount: 16_384), !chunk.isEmpty { buffer.append(chunk) }
+            }
+        }
+        var timedOut = false
         if let timeout = timeoutSeconds {
             let deadline = Date().addingTimeInterval(timeout)
             while p.isRunning && Date() < deadline {
@@ -53,18 +64,30 @@ final class SystemProcessRunner: ProcessRunning {
                     kill(p.processIdentifier, SIGKILL)
                 }
                 p.waitUntilExit()
-                return ProcessResult(exitCode: -1, stdout: "", stderr: "timeout")
+                timedOut = true
             }
         } else {
             p.waitUntilExit()
         }
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        return ProcessResult(
-            exitCode: p.terminationStatus,
-            stdout: String(data: outData, encoding: .utf8) ?? "",
-            stderr: String(data: errData, encoding: .utf8) ?? ""
-        )
+        p.waitUntilExit()
+        readers.wait()
+        return ProcessResult(exitCode: timedOut ? -1 : p.terminationStatus,
+                             stdout: stdout.text,
+                             stderr: timedOut ? "timeout" : stderr.text)
+    }
+}
+
+private final class ProcessOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func append(_ chunk: Data) {
+        lock.lock(); defer { lock.unlock() }
+        data.append(chunk)
+        if data.count > 65_536 { data.removeFirst(data.count - 65_536) }
+    }
+    var text: String {
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
     }
 }

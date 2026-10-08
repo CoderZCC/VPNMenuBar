@@ -15,3 +15,8 @@ build/
 
 # Claude Code local data
 .claude/
+
+# Generated local runtime payload (rebuild before xcodegen)
+VPNMenuBar/Resources/BundledRuntime/
+VPNMenuBar/Resources/ThirdParty/
+__pycache__/

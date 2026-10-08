@@ -7,9 +7,7 @@ enum AppLogLevel: String {
 }
 
 /// File-based logger for user-facing diagnostics. Writes per-day log files
-/// `~/Library/Logs/VPNMenuBar/vpnmenubar-YYYY-MM-DD.log` and mirrors each line
-/// to `NSLog` for Console.app. Files older than `retentionDays` are purged at
-/// launch. Callers are responsible for redacting secrets — this class does not
+/// `~/Library/Logs/VPNMenuBar/vpnmenubar-YYYY-MM-DD.log` without mirroring message contents to system logs. Old files are purged daily. Callers are responsible for redacting secrets — this class does not
 /// inspect payloads.
 final class AppLogger {
     static let shared = AppLogger()
@@ -19,14 +17,16 @@ final class AppLogger {
     private let queue = DispatchQueue(label: "com.example.vpnmenubar.applogger", qos: .utility)
     private let timestampFormatter: DateFormatter
     private let dateFormatter: DateFormatter
-    private let retentionDays: Int = 14
+    private let retentionDays: Int = 3
+    private var lastPurgeDay = ""
     private let filePrefix = "vpnmenubar-"
     private let fileSuffix = ".log"
 
-    private init() {
-        let libraryLogs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+    init(logDirectory: URL? = nil) {
+        let defaultLogs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
             .first!
             .appendingPathComponent("Logs/VPNMenuBar", isDirectory: true)
+        let libraryLogs = logDirectory ?? defaultLogs
         self.logDirectory = libraryLogs
 
         let ts = DateFormatter()
@@ -39,7 +39,8 @@ final class AppLogger {
         day.dateFormat = "yyyy-MM-dd"
         self.dateFormatter = day
 
-        try? FileManager.default.createDirectory(at: libraryLogs, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: libraryLogs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: libraryLogs.path)
         purgeOldLogs()
     }
 
@@ -66,7 +67,6 @@ final class AppLogger {
         let ts = timestampFormatter.string(from: now)
         let short = file.split(separator: "/").last.map(String.init) ?? file
         let entry = "\(ts) [\(level.rawValue)] \(short):\(line) \(message)\n"
-        NSLog("VPNMenuBar: [%{public}@] %{public}@", level.rawValue, message)
         queue.async { [weak self] in
             self?.appendToFile(entry, at: now)
         }
@@ -76,10 +76,18 @@ final class AppLogger {
         guard let data = entry.data(using: .utf8) else { return }
         let url = logDirectory.appendingPathComponent("\(filePrefix)\(dateFormatter.string(from: date))\(fileSuffix)")
         let fm = FileManager.default
+        let day = dateFormatter.string(from: date)
+        if lastPurgeDay != day {
+            purgeOldLogs()
+            lastPurgeDay = day
+        }
         if !fm.fileExists(atPath: url.path) {
-            try? data.write(to: url)
+            _ = fm.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600])
             return
         }
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+        guard size + data.count <= 2 * 1024 * 1024 else { return }
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
         defer { try? handle.close() }
         _ = try? handle.seekToEnd()

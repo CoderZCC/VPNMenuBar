@@ -9,8 +9,8 @@ struct VPNConfig: Codable, Equatable {
     // Required — VPN server settings (user must fill in their own values)
     var gateway: String = ""
     var serverCertPin: String = ""
-    var openconnectPath: String = ArchDetector.defaultPaths.openconnect
-    var vpncScriptPath: String = ArchDetector.defaultPaths.vpncScript
+    var openconnectPath: String = ManagedRuntime.openconnect
+    var vpncScriptPath: String = ManagedRuntime.script
     var skipDNSModification: Bool = true
 
     // Two-step gateways (e.g. ocserv) send a second auth form asking for the
@@ -20,15 +20,9 @@ struct VPNConfig: Codable, Equatable {
     // existed still decode (nil == false).
     var otpSentSeparately: Bool? = nil
 
-    // Some gateways route clients by User-Agent: openconnect's own
-    // "Open AnyConnect VPN Agent v9.x" gets served an HTTP Basic challenge
-    // instead of the OTP form, so the second auth step always fails with 401
-    // while the official Cisco client — which sends the string below — works.
-    // Optional so pre-existing configs pick up the default on upgrade; empty
-    // string means "send openconnect's own UA".
+    // Override only with the VPN administrator's approval; use the native UA by default.
     var userAgent: String? = nil
-
-    static let defaultUserAgent = "AnyConnect Windows 4.10.06079"
+    static let defaultUserAgent = ""
 
     // Per-domain DNS overrides, written as /etc/resolver/<domain> files so that
     // ONLY those domains resolve via the intranet nameserver while every other
@@ -40,7 +34,7 @@ struct VPNConfig: Codable, Equatable {
 
     /// The UA to actually pass to openconnect, or nil to leave it alone.
     var effectiveUserAgent: String? {
-        guard let ua = userAgent else { return VPNConfig.defaultUserAgent }
+        let ua = userAgent ?? VPNConfig.defaultUserAgent
         return ua.isEmpty ? nil : ua
     }
 
@@ -62,8 +56,8 @@ struct VPNConfig: Codable, Equatable {
         copy.totpSecret = VPNConfig.cleanField(totpSecret)
         copy.gateway = VPNConfig.cleanField(gateway)
         copy.serverCertPin = VPNConfig.cleanField(serverCertPin)
-        copy.openconnectPath = VPNConfig.cleanField(openconnectPath)
-        copy.vpncScriptPath = VPNConfig.cleanField(vpncScriptPath)
+        copy.openconnectPath = ManagedRuntime.openconnect
+        copy.vpncScriptPath = ManagedRuntime.script
         copy.userAgent = userAgent.map { VPNConfig.cleanField($0) }
         copy.resolverRules = resolverRules?.map {
             ResolverRule(domain: VPNConfig.cleanField($0.domain).lowercased(),

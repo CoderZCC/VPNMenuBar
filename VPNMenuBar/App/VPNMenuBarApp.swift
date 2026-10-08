@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 import UserNotifications
 import Combine
-import Sparkle
 
 @main
 struct VPNMenuBarApp: App {
@@ -14,9 +13,7 @@ struct VPNMenuBarApp: App {
             MenuContentView(
                 controller: coordinator.controller,
                 onOpenSettings: coordinator.openSettings,
-                onCheckDependencies: coordinator.openDependencyAlert,
-                onAbout: coordinator.openAbout,
-                updaterController: coordinator.updaterController
+                onAbout: coordinator.openAbout
             )
         } label: {
             Image(nsImage: StatusBarIconFactory.image(for: coordinator.controller.state))
@@ -26,25 +23,25 @@ struct VPNMenuBarApp: App {
 }
 
 /// App delegate that intercepts termination to ensure the VPN is disconnected first.
-/// Fires on every quit path: menu Quit, Cmd-Q, Dock force-quit, system logout, etc.
+/// Handles normal quit/logout requests; force-kill bypasses application delegates.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // If the coordinator hasn't been created yet, or the VPN isn't connected,
         // nothing to do — let the app exit immediately.
         guard let coordinator = AppCoordinator.shared,
-              coordinator.controller.state.isConnected else {
+              coordinator.controller.hasActiveProcess else {
             return .terminateNow
         }
         // VPN is up — disconnect asynchronously, then approve termination.
         Task { @MainActor in
             await coordinator.controller.disconnect()
-            NSApp.reply(toApplicationShouldTerminate: true)
+            NSApp.reply(toApplicationShouldTerminate: !coordinator.controller.hasActiveProcess)
         }
         return .terminateLater
     }
 }
 
-/// Owns the singleton controller and manages auxiliary windows (Onboarding, DependencyAlert).
+/// Owns the singleton controller and manages settings and about windows.
 @MainActor
 final class AppCoordinator: ObservableObject {
     /// Weak shared reference so the AppDelegate can reach the coordinator during
@@ -54,10 +51,7 @@ final class AppCoordinator: ObservableObject {
     let configStore: ConfigStore
     let dependencyChecker: DependencyChecker
     let controller: VPNController
-    let updaterController: SPUStandardUpdaterController
 
-    private var onboardingWindow: NSWindow?
-    private var dependencyAlertWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var aboutWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
@@ -72,11 +66,7 @@ final class AppCoordinator: ObservableObject {
             dependencyChecker: checker,
             openConnectProcess: OpenConnectProcess()
         )
-        self.updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
+
 
         Self.shared = self
 
@@ -101,7 +91,7 @@ final class AppCoordinator: ObservableObject {
             self?.requestNotificationPermission()
             LoginItemManager.applyPreference()
             self?.controller.startNetworkMonitoring()
-            self?.showOnboardingIfNeeded()
+            self?.showSettingsIfNeeded()
             self?.scheduleAutoConnectIfNeeded()
         }
     }
@@ -111,7 +101,7 @@ final class AppCoordinator: ObservableObject {
     /// `shouldAutoReconnect` inside the controller, so later network drops
     /// auto-recover through the existing reachability path.
     private func scheduleAutoConnectIfNeeded() {
-        guard AutoConnectPreference.isEnabled, configStore.isConfigured else { return }
+        guard AutoConnectPreference.isEnabled, configStore.hasConfiguration else { return }
         AppLogger.shared.info("auto-connect on launch scheduled (5s delay)")
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
@@ -138,9 +128,9 @@ final class AppCoordinator: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    private func showOnboardingIfNeeded() {
-        if !configStore.isConfigured {
-            openOnboarding()
+    private func showSettingsIfNeeded() {
+        if !configStore.hasConfiguration {
+            openSettings()
         }
     }
 
@@ -167,46 +157,12 @@ final class AppCoordinator: ObservableObject {
             object: win,
             queue: .main
         ) { [weak self] _ in
-            self?.settingsWindow = nil
-        }
-
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func openOnboarding() {
-        if let win = onboardingWindow {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let view = OnboardingView(
-            controller: controller,
-            configStore: configStore,
-            onFinished: { [weak self] in
-                self?.onboardingWindow?.close()
-                self?.onboardingWindow = nil
-            }
-        )
-        let hosting = NSHostingController(rootView: view)
-        let win = NSWindow(contentViewController: hosting)
-        win.title = "Setup"
-        win.styleMask = [.titled, .closable]
-        win.center()
-        win.isReleasedWhenClosed = false
-        onboardingWindow = win
-
-        // Observe user-initiated close (traffic-light) so we can transition to
-        // "Setup incomplete" if config still isn't complete.
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: win,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.onboardingWindow = nil
-            if !self.configStore.isConfigured {
-                self.controller.markSetupIncomplete()
+            // NotificationCenter's explicit .main queue guarantees synchronous actor access.
+            MainActor.assumeIsolated {
+                self?.settingsWindow = nil
+                if let self, !self.configStore.hasConfiguration {
+                    self.controller.markSetupIncomplete()
+                }
             }
         }
 
@@ -233,35 +189,13 @@ final class AppCoordinator: ObservableObject {
             object: win,
             queue: .main
         ) { [weak self] _ in
-            self?.aboutWindow = nil
-        }
-
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func openDependencyAlert() {
-        if let win = dependencyAlertWindow {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let view = DependencyAlertView(
-            controller: controller,
-            configStore: configStore,
-            onClose: { [weak self] in
-                self?.dependencyAlertWindow?.close()
-                self?.dependencyAlertWindow = nil
+            MainActor.assumeIsolated {
+                self?.aboutWindow = nil
             }
-        )
-        let hosting = NSHostingController(rootView: view)
-        let win = NSWindow(contentViewController: hosting)
-        win.title = "Dependencies"
-        win.styleMask = [.titled, .closable]
-        win.center()
-        win.isReleasedWhenClosed = false
-        dependencyAlertWindow = win
+        }
+
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
 }

@@ -27,13 +27,7 @@ enum ResolverFileError: Error, LocalizedError {
     }
 }
 
-/// Installs and inspects `/etc/resolver/<domain>` files.
-///
-/// The files are persistent, so nothing here runs per connect: one
-/// authorization writes them and they stay. That is why this needs no sudoers
-/// entry of its own and reuses the same `osascript ... with administrator
-/// privileges` path as `DependencyInstaller.installSudoersRule` — the only
-/// privilege escalation available under ad-hoc signing (Quirk #13).
+/// Persistent, scoped DNS rules installed only through system authorization.
 enum ResolverFileManager {
     static let directory = "/etc/resolver"
 
@@ -74,7 +68,7 @@ enum ResolverFileManager {
     static func isManaged(domain: String) -> Bool {
         guard let text = try? String(contentsOfFile: path(forDomain: domain), encoding: .utf8)
         else { return false }
-        return text.contains(marker)
+        return text.split(separator: "\n").contains(Substring(marker))
     }
 
     /// Rules that are missing or point at a different nameserver than configured.
@@ -90,7 +84,7 @@ enum ResolverFileManager {
         let wanted = Set(rules.map { $0.domain.lowercased() })
         let entries = (try? fileManager.contentsOfDirectory(atPath: directory)) ?? []
         return entries
-            .filter { !wanted.contains($0.lowercased()) && isManaged(domain: $0) }
+            .filter { ResolverRule.isValidDomain($0) && !wanted.contains($0.lowercased()) && isManaged(domain: $0) }
             .sorted()
     }
 
@@ -128,52 +122,55 @@ enum ResolverFileManager {
         }
         AppLogger.shared.info("ResolverFileManager: " + actions.joined(separator: ", "))
 
-        try await Task.detached(priority: .userInitiated) {
-            var steps: [String] = ["/bin/mkdir -p \(directory)"]
-            var tmpPaths: [String] = []
-            defer { tmpPaths.forEach { try? FileManager.default.removeItem(atPath: $0) } }
-
-            for rule in pending {
-                // User-owned temp file; only the `install` step needs root.
-                let tmp = NSTemporaryDirectory() + "vpnmenubar-resolver-\(UUID().uuidString)"
-                try content(for: rule).write(toFile: tmp, atomically: true, encoding: .utf8)
-                tmpPaths.append(tmp)
-                steps.append("/usr/bin/install -m 644 -o root -g wheel \"\(tmp)\" \"\(path(forDomain: rule.domain))\"")
-            }
-            for domain in orphans {
-                steps.append("/bin/rm -f \"\(path(forDomain: domain))\"")
-            }
-            // Never let a failed cache reload fail the whole install — the files
-            // are already correct and macOS picks them up on its own shortly.
-            let shellCmd = steps.joined(separator: " && ")
-                + " && (/usr/bin/killall -HUP mDNSResponder || true)"
-            try runPrivileged(shellCmd)
+        let command = try installationCommand(pending: pending, orphans: orphans)
+        _ = try await Task.detached(priority: .userInitiated) {
+            try PrivilegedCommand.run(command)
         }.value
-
-        AppLogger.shared.info("ResolverFileManager: install succeeded")
+        AppLogger.shared.info("Scoped DNS rules updated")
     }
 
-    // MARK: - privileged execution
-
-    /// Mirrors DependencyInstaller's AppleScript path, including the -128
-    /// cancel mapping, so a cancelled prompt stays silent in the UI.
-    private static func runPrivileged(_ shellCmd: String) throws {
-        let escaped = shellCmd
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        var errorInfo: NSDictionary?
-        guard let script = NSAppleScript(
-            source: "do shell script \"\(escaped)\" with administrator privileges")
-        else {
-            throw DependencyInstallError.osascriptFailed(message: "Could not build AppleScript")
+    static func installationCommand(pending: [ResolverRule], orphans: [String]) throws -> String {
+        for rule in pending where !ResolverRule.isValidDomain(rule.domain) || !ResolverRule.isValidIPv4(rule.nameserver) {
+            throw ResolverFileError.invalidRule(rule)
         }
-        _ = script.executeAndReturnError(&errorInfo)
-        if let info = errorInfo {
-            let code = (info[NSAppleScript.errorNumber] as? Int) ?? 0
-            if code == -128 { throw DependencyInstallError.userCancelled }
-            let msg = (info[NSAppleScript.errorMessage] as? String) ?? "unknown AppleScript error"
-            AppLogger.shared.error("ResolverFileManager: osascript failed: \(msg) (code \(code))")
-            throw DependencyInstallError.osascriptFailed(message: "\(msg) (code \(code))")
+        guard orphans.allSatisfy(ResolverRule.isValidDomain) else {
+            throw DependencyInstallError.unsupported(reason: "Invalid managed DNS filename.")
         }
+        let q = PrivilegedCommand.quote
+        var steps = ["""
+        set -eu
+        umask 077
+        [ ! -L /etc/resolver ] || exit 60
+        /bin/mkdir -p -m 755 /etc/resolver
+        [ "$(/usr/bin/stat -f %u /etc/resolver)" = 0 ] || exit 61
+        mode=$(/usr/bin/stat -f %Lp /etc/resolver)
+        [ $((0$mode & 022)) -eq 0 ] || exit 62
+        case "$(/bin/ls -lde /etc/resolver | /usr/bin/awk '{print $1}')" in *+*) exit 63;; esac
+        """]
+        // Preflight every destination before making any changes.
+        for domain in Set(pending.map(\.domain) + orphans).sorted() {
+            let path = q(path(forDomain: domain))
+            steps.append("""
+            if [ -e \(path) ] || [ -L \(path) ]; then
+                [ ! -L \(path) ] && [ -f \(path) ] || exit 64
+                [ "$(/usr/bin/stat -f %u \(path))" = 0 ] || exit 65
+                /usr/bin/grep -Fxq \(q(marker)) \(path) || exit 66
+            fi
+            """)
+        }
+        for rule in pending {
+            steps.append("""
+            tmp=$(/usr/bin/mktemp /etc/resolver/.vpnmenubar.XXXXXXXX)
+            trap '/bin/rm -f "$tmp"' EXIT
+            /usr/bin/printf '%s\\n' \(q(content(for: rule))) > "$tmp"
+            /usr/sbin/chown root:wheel "$tmp"
+            /bin/chmod 644 "$tmp"
+            /bin/mv -f "$tmp" \(q(path(forDomain: rule.domain)))
+            trap - EXIT
+            """)
+        }
+        for domain in orphans { steps.append("/bin/rm -f " + q(path(forDomain: domain))) }
+        steps.append("/usr/bin/killall -HUP mDNSResponder >/dev/null 2>&1 || true")
+        return steps.joined(separator: "\n")
     }
 }
