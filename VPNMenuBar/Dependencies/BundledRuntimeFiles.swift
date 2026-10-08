@@ -3,22 +3,21 @@ import Foundation
 
 enum BundledRuntimeFiles {
     static let hashes: [String: String] = [
-        "libgmp.10.dylib": "fbbb6f418be94d31c17067b5ecc68445d9f28a5e699a86be9ec8713bddd55da0",
-        "libgnutls.30.dylib": "c5c17b166b954fb6c432d193c4e727d25d535901b9b3b7db8aac44ccff9bb3b5",
-        "libhogweed.7.0.dylib": "0fc6bee8e98d78100c6cd4b2b9bed262d34edbec1d3164770ef82504e4678e6e",
-        "libidn2.0.dylib": "f9a997a02619d0c0ece3b0764ed2ceb0d1a81a36d33ec128f5ae8e45f9fa58a3",
-        "libintl.8.dylib": "426ab888e3b214f18f451de47d9575d6774ba9cd3a8545b948d299ec1edca09e",
-        "libnettle.9.0.dylib": "bd40797223bfccb7ef814017f45ce1677d5de23d3c7da78fdc2c8ee20b05a6d8",
-        "libopenconnect.5.dylib": "303f83d367452737aada2bbcb7bec8403165ac538697f13d8be536e532d62731",
-        "libp11-kit.0.dylib": "615fd6cc0b26b2ef1edc751d9eba92ea68533b7b2293755712751df5ddfcad5b",
-        "libstoken.1.dylib": "583bb6e308dacc201da6ff92069ec6114dc5633b4ba8484d843e445166973d1f",
-        "libtasn1.6.dylib": "34597bb172666bc4f1f540045c759732bb3663268b0577214c87ef8edb376805",
-        "libtomcrypt.1.dylib": "8661b336c24130ecc138dbabb9b49bec1fe07d6050cf15e864bd4ca9dc7821da",
-        "libtommath.1.dylib": "def4bb7e653185d384269a61f62b2f9f30360244888c0ba2a1607114344063b3",
-        "libunistring.5.dylib": "2074b3e68329f5f949a162b953cdf19f7e8befdc32cc77017e45ce170bfee03c",
-        "openconnect": "3d9497545c5a4af989c18883b89f7c5fb1e7d6288b4c4d43289ec201b7d45e5c",
+        "libgmp.10.dylib": "2a1dbf5a7bef70890a45937c001c959461e04839abc49990f8793d1b5eb1664f",
+        "libgnutls.30.dylib": "bf16ef512dc7d45502e493f2a32ef28757d8524923e28e9490cfddb428e82f8f",
+        "libhogweed.7.0.dylib": "5a1259c6c69ebef010033c32eb6f0c433ac030e2c7eeb54f08ea9f97109020e7",
+        "libidn2.0.dylib": "8dbead371c622cf6d9dd9c451f2f5a07c7f98267bea7e219806a9734b4a77599",
+        "libnettle.9.0.dylib": "5327481c2ff90089d5c2e89fc3086ae5ca7c3769d69c78b3bef4200fd8434f03",
+        "libopenconnect.5.dylib": "8d6b5a420d1346a2052805b64ea3fd169dc1957cef20100a6531724e81608ffb",
+        "libp11-kit.0.dylib": "094b80ae42bf6f64dd7fbb826d17b56705e320bb05b7999abad514e4cc9ec3e4",
+        "libstoken.1.dylib": "29364e6d74acec34a03e135b5c40e8e3d39a7dedda63424b6833bd48a0a20d74",
+        "libtasn1.6.dylib": "323618ec0d8c82d733efc06d783971b1eeea534826cbb249b9fabdbbb0bf68ee",
+        "libtomcrypt.1.dylib": "5a95e7cac606e868011f16d1aca6a43c2b976473b6aa6c1df9a65ab19af56d08",
+        "libtommath.1.dylib": "3918818f11e420e5728565abd00fa97a197aafa2e9d36cb56bacf41b68ffcfb5",
+        "libunistring.5.dylib": "cecfb53a1f691d9d7cd0487cf8a699fe3e2a9da1e34009fce73f3d23ef37c84f",
+        "openconnect": "944541e14b124792d6836730a7027f449a6c4bb9d157b1e7408f80ccec323027",
         "vpnc-script--no-dns": "2fa3937eaa9fbccd964ed2c47bd70a6dc99f2dba6289e122bc884edd4e992fa6",
     ]
     static let architectures = ["arm64"]
-    static let minimumOS = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
+    static let minimumOS = OperatingSystemVersion(majorVersion: 13, minorVersion: 0, patchVersion: 0)
 }

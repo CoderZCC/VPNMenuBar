@@ -15,7 +15,7 @@ macOS 13+ SwiftUI menu-bar app. UI → Core → Config / Dependencies → utilit
 
 ## Build and tests
 
-Run `python3 scripts/prepare-isolated-p11.py` followed by `python3 scripts/prepare-bundled-runtime.py` with locally installed build dependencies, then regenerate with `xcodegen generate` after adding/removing Swift files. The generated Xcode project is ignored. Local builds use ad-hoc signing in `project.yml` without Keychain entitlements or a profile. The Bundle ID is `io.coderzcc.vpnmenubar`. Developer ID distribution and notarization remain separate deployment requirements.
+Run `python3 scripts/build-compatible-runtime.py` on Apple Silicon to build and package the pinned runtime for macOS 13, then regenerate with `xcodegen generate` after adding/removing Swift files. The generated Xcode project is ignored. Local builds use ad-hoc signing in `project.yml` without Keychain entitlements or a profile. The Bundle ID is `io.coderzcc.vpnmenubar`. Developer ID distribution and notarization remain separate deployment requirements.
 
 ```sh
 bash tests/run-local-credential-tests.sh

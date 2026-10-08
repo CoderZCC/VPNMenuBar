@@ -19,11 +19,10 @@ System authorization may require administrator credentials during automatic reco
 
 Use [the deployment checklist](docs/security-deployment.md) and [the Chinese setup guide](INSTALL.md). Do not reuse the old ad-hoc release or sudoers recipes.
 
-Build machines need Xcode, XcodeGen, Python 3 and a local OpenConnect build with its libraries. The p11-kit preparation step downloads pinned, hash-verified source archives into `build/` when absent; subsequent packaging is offline and targets the build machine architecture. Ninja is required on the build machine. End-user machines need none of those development dependencies.
+Build machines need Xcode, XcodeGen, Python 3, Ninja, pkg-config and GNU Autoconf/Automake/Libtool. The Apple Silicon compatibility recipe downloads pinned, hash-verified sources, builds the runtime for macOS 13, and stages everything under `build/`; it installs nothing into system directories. It packages the closed library graph and rejects dependencies requiring a newer macOS. End-user machines need none of those development tools. A macOS 13 deployment target is not a substitute for testing on an actual macOS 13 device.
 
 ```bash
-python3 scripts/prepare-isolated-p11.py
-python3 scripts/prepare-bundled-runtime.py
+python3 scripts/build-compatible-runtime.py
 xcodegen generate
 xcodebuild -project VPNMenuBar.xcodeproj -scheme VPNMenuBar \
   -configuration Debug -destination 'platform=macOS' \

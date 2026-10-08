@@ -1,5 +1,7 @@
 # Lessons Index
 
+- [2026-10-08 Audit API availability when lowering the macOS deployment target](2026-10-08-audit-macos-runtime-availability.md) — host configure probes can select newer libc APIs `[macos, build, compatibility]`
+
 - [2026-10-08 Reset inherited signal dispositions and masks before starting the supervisor](2026-10-08-authorization-signal-inheritance.md) — administrator authorization inherits ignored and blocked SIGTERM
 
 - [2026-10-08 Execute trust checks against the installed platform](2026-10-08-execute-trust-checks.md) — CLT symlink layout and codesign inline requirement parsing

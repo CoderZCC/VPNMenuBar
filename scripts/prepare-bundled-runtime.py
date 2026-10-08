@@ -4,7 +4,7 @@ import hashlib, json, os, pathlib, re, shutil, subprocess, tempfile, importlib.u
 root = pathlib.Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('runtime_package', root/'scripts/runtime-package.py')
 runtime_package = importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime_package)
-isolated_p11 = (root/'build/p11-isolated/compiled/p11-kit/libp11-kit.0.dylib').resolve(strict=True)
+isolated_p11 = pathlib.Path(os.environ.get('P11_KIT_LIBRARY', str(root/'build/p11-isolated/compiled/p11-kit/libp11-kit.0.dylib'))).resolve(strict=True)
 build = root/'build'; build.mkdir(exist_ok=True)
 lock = build/'runtime-packaging.lock'
 # Never overwrite a lock from another process or an interrupted publication.
@@ -47,6 +47,11 @@ try:
             for version in versions:
                 parts = tuple(map(int,version.split('.')))
                 minimum = max(minimum, (parts+(0,0,0))[:3])
+        requested_minimum = os.environ.get('RUNTIME_MAX_MIN_OS')
+        if requested_minimum:
+            limit = tuple(map(int, requested_minimum.split('.')))
+            if minimum > (limit + (0, 0, 0))[:3]:
+                raise ValueError('Runtime exceeds requested minimum macOS version')
         for src, (name, edges) in graph.items():
             if not architectures.issubset(set(run(['lipo','-archs',src]).split())):
                 raise ValueError('Dependency architecture mismatch')
@@ -92,6 +97,9 @@ try:
         (notices/'README.txt').write_text('Bundled OpenConnect and dependencies. Local build inventory; review license and corresponding-source requirements before external distribution.\n'+ '\n'.join(p.parent.name+' '+p.name for p in sorted(packages))+'\n')
 
         shutil.copyfile(root/'build/p11-isolated/p11-kit-0.26.5/COPYING', notices/'p11-kit-COPYING')
+        source_notices = os.environ.get('RUNTIME_SOURCE_NOTICES')
+        if source_notices:
+            shutil.copytree(source_notices, notices/'source-build', dirs_exist_ok=True)
         backup = staging/'backup'; backup.mkdir()
         runtime_package.publish([
             (out, root/'VPNMenuBar/Resources/BundledRuntime'),
