@@ -221,7 +221,9 @@ final class VPNController: ObservableObject {
         let proc = openConnectProcess
         do {
             // Authorization can take minutes; generate the OTP only after it completes.
+            AppLogger.shared.info("requesting system authorization for VPN session")
             try await Task.detached(priority: .userInitiated) { try proc.prepare(config: config) }.value
+            AppLogger.shared.info("system authorization completed; VPN session prepared")
         } catch {
             state = .failed(reason: error.localizedDescription)
             return
@@ -397,11 +399,12 @@ final class VPNController: ObservableObject {
                 let stillRunning = self.openConnectProcess.isRunning()
                 let tail = stillRunning ? "" : self.openConnectProcess.recentStderrTail(bytes: 600)
                 let didTransition = await MainActor.run { () -> Bool in
-                    guard !stillRunning, case .connected = self.state else { return false }
+                    guard !stillRunning, case .connected(let since) = self.state else { return false }
+                    AppLogger.shared.info("VPN session ended after \(Int(Date().timeIntervalSince(since)))s; networkReachable=\(self.networkReachable)")
                     if tail.isEmpty {
                         AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected (no stderr captured)")
                     } else {
-                        AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected. stderr tail:\n\(tail)")
+                        AppLogger.shared.error("watchdog: openconnect child vanished unexpectedly — transitioning to disconnected. diagnostic: \(tail)")
                     }
                     self.state = .disconnected
                     Self.postUnexpectedDisconnectNotification()

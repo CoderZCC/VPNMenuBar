@@ -47,6 +47,8 @@ Additional execution tests exercise resolver creation/replacement, readable dire
 
 Local evidence on 2026-10-08: the previous bundled App (0.2.24) connected successfully on the current macOS 26 machine. The macOS 13-targeted 0.2.25 rebuild passed the Release build, strict ad-hoc signature verification, all 14 Mach-O minimum-version checks, OpenConnect feature comparison and the security regression suite, including actual GnuTLS/p11-kit isolation checks. The isolated p11-kit rebuild passed 44 upstream tests. These results do not establish real connection or compatibility on an older OS. Real macOS 13/14/15 connect/disconnect, routing/DNS cleanup, sleep/reconnect and managed-device acceptance remain pending. No old-OS test device was available during this build.
 
+Local evidence on 2026-10-09: 0.2.28 detaches the session supervisor from the authorization job's process group. Before this change, installed builds disconnected whenever launchd retired an idle `authtrampoline`. Installed 0.2.28 on macOS 26.1 stayed connected across that event. The same Release, signature, Mach-O minimum-version and regression checks passed. Older-OS acceptance remains pending.
+
 ## Isolated crypto configuration and packaging
 
 The supervisor explicitly sets `GNUTLS_SYSTEM_PRIORITY_FILE=/dev/null` and `P11_KIT_NO_USER_CONFIG=1`. P11-kit 0.26.5 is rebuilt from its verified source archive with system, user and module paths under `/var/empty/vpnmenubar`, with the trust module disabled. No files are installed there. macOS system trust and the configured server pin remain available. This build intentionally does not support external PKCS#11 tokens or Homebrew TLS configuration.

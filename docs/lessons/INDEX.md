@@ -8,3 +8,4 @@
 
 - [2026-10-08 Keep a credential FIFO open until its reader is attached](2026-10-08-keep-credential-fifo-open.md) — early close discards buffered credentials `[macos, ipc, security, lifecycle]`
 - [2026-10-08 Validate signing before adopting Data Protection Keychain on macOS](2026-10-08-macos-keychain-signing-requirement.md) — unsigned builds fail with -34018 despite passing storage tests `[macos, keychain, signing, migration]`
+- [2026-10-09 Detach the VPN supervisor from the authtrampoline process group](2026-10-09-authtrampoline-idle-exit-group-kill.md) — idle-exit of the authorization daemon kills its process group and drops the VPN `[macos, launchd, process-group, lifecycle]`

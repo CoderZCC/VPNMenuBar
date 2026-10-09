@@ -99,11 +99,36 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
 
     func recentStderrTail(bytes: Int) -> String {
         // Only fixed classifications leave the in-memory output buffer.
-        Self.failureReason(snapshot()) ?? "VPN process ended."
+        let status = session.flatMap { try? String(contentsOfFile: $0 + "/status", encoding: .utf8) }
+        return Self.exitDiagnostic(snapshot(), status: status)
+    }
+
+    static func exitDiagnostic(_ text: String, status: String?) -> String {
+        let value = status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let code = value.count <= 3 && !value.isEmpty && value.allSatisfy({ $0.isASCII && $0.isNumber })
+            ? Int(value).flatMap { (0...255).contains($0) ? $0 : nil } : nil
+        let patterns: [(String, [String])] = [
+            ("supervisor_term", ["VPNMB_SUPERVISOR_TERM"]),
+            ("supervisor_hup", ["VPNMB_SUPERVISOR_HUP"]),
+            ("supervisor_int", ["VPNMB_SUPERVISOR_INT"]),
+            ("control_closed", ["VPNMB_CONTROL_CLOSED"]),
+            ("cookie_rejected", ["Cookie was rejected by server"]),
+            ("server_terminated", ["Session terminated by server", "Received server disconnect", "received server terminate packet"]),
+            ("signal_cancelled", ["User cancelled (SIG"]),
+            ("signal_detached", ["User detached from session"]),
+            ("io_error", ["Unrecoverable I/O error"]),
+            ("reconnect_failed", ["Reconnect failed", "reconnect failed"]),
+            ("dead_peer", ["detected dead peer", "Detected dead peer"]),
+            ("certificate_failed", ["Certificate verification failure"]),
+            ("authentication_failed", ["Login failed", "authentication failure", "wrong otp value", "wrong otp pin"])
+        ]
+        let events = patterns.filter { _, matches in matches.contains(where: text.contains) }.map { $0.0 }
+        return "VPN process ended: exit=\(code.map(String.init) ?? "unavailable") events=\(events.isEmpty ? "unclassified" : events.joined(separator: ","))"
     }
 
     func stop() throws {
         // EOF is the sole control message; no executable, script or PID comes from the client.
+        if control != nil { AppLogger.shared.info("client closing VPN control channel") }
         try? control?.close()
         control = nil
         try? input?.close()
@@ -180,8 +205,16 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
           done
           /bin/rm -rf "$session"
         }
+        supervisor_signal() {
+          if [ "${diagnostics_ready:-}" = yes ]; then
+            /usr/bin/printf 'VPNMB_SUPERVISOR_%s\\n' "$1" >&4
+          fi
+          exit 0
+        }
         trap cleanup EXIT
-        trap 'exit 0' TERM INT HUP
+        trap 'supervisor_signal TERM' TERM
+        trap 'supervisor_signal INT' INT
+        trap 'supervisor_signal HUP' HUP
         # A client that disappears before attaching must not leave a privileged worker.
         ( timer=
           trap '/bin/kill "$timer" 2>/dev/null || true; wait "$timer" 2>/dev/null || true' EXIT
@@ -197,14 +230,17 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         ) &
         startup_watch=$!
         exec 3<"$session/control"
+        exec 4>"$session/output"
+        diagnostics_ready=yes
         /usr/bin/touch "$session/attached"
         # Let the watchdog observe attachment; signal cancellation can race its traps.
         wait "$startup_watch" 2>/dev/null || true
         startup_watch=
         cd "$session/runtime" || exit 1
-        /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/var/root GNUTLS_SYSTEM_PRIORITY_FILE=/dev/null P11_KIT_NO_USER_CONFIG=1 ./openconnect \(invocation) <"$session/input" >"$session/output" 2>&1 3<&- &
+        /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/var/root GNUTLS_SYSTEM_PRIORITY_FILE=/dev/null P11_KIT_NO_USER_CONFIG=1 ./openconnect \(invocation) <"$session/input" >"$session/output" 2>&1 3<&- 4>&- &
         child=$!
         ( IFS= read -r ignored <&3 || true
+          /usr/bin/printf 'VPNMB_CONTROL_CLOSED\\n' >&4
           if [ "$(/bin/ps -p "$child" -o ppid= | /usr/bin/tr -d ' ')" = "$$" ]; then /bin/kill -TERM "$child" 2>/dev/null || true; fi
         ) &
         control_reader=$!
@@ -214,7 +250,10 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         /bin/kill "$control_reader" 2>/dev/null || true
         wait "$control_reader" 2>/dev/null || true
         control_reader=
-        /bin/echo "$status" > "$session/status"
+        # Publish only the numeric exit code, readable before the client observes it.
+        /bin/echo "$status" > "$session/status.tmp"
+        /bin/chmod 644 "$session/status.tmp"
+        /bin/mv "$session/status.tmp" "$session/status"
         # Keep a brief status window for the client, then remove only this root-created directory.
         /bin/sleep 30 &
         status_timer=$!
@@ -236,8 +275,10 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         /usr/sbin/chown \(uid) "$session/input" "$session/output" "$session/control"
         /bin/chmod 600 "$session/input" "$session/output" "$session/control"
         /bin/chmod 711 "$session"
-        # Authorization ignores and blocks SIGTERM; restore dispositions and the inherited mask.
-        /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/perl -MPOSIX -e 'for (qw(HUP INT TERM PIPE)) { $SIG{$_} = "DEFAULT" } defined(POSIX::sigprocmask(POSIX::SIG_SETMASK(), POSIX::SigSet->new())) or exit 126; exec @ARGV; exit 127' /bin/sh -c \(q(supervisor)) VPNMenuBar-session "$session" </dev/null >/dev/null 2>&1 &
+        # Separate the long-lived VPN session from the short-lived authorization job's group.
+        # launchd may terminate that group after its job exits. Explicit signals and control EOF still stop us.
+        # Authorization also ignores and blocks SIGTERM; restore dispositions and the inherited mask.
+        /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/perl -MPOSIX -e 'defined(POSIX::setsid()) or exit 125; for (qw(HUP INT TERM PIPE)) { $SIG{$_} = "DEFAULT" } defined(POSIX::sigprocmask(POSIX::SIG_SETMASK(), POSIX::SigSet->new())) or exit 126; exec @ARGV; exit 127' /bin/sh -c \(q(supervisor)) VPNMenuBar-session "$session" </dev/null >/dev/null 2>&1 &
         /bin/echo "$!" > "$session/supervisor"
         /bin/chmod 644 "$session/supervisor"
         trap - EXIT

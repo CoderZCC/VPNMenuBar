@@ -39,6 +39,18 @@ struct SecurityHardeningTests {
         let reason = OpenConnectProcess.failureReason("Login failed token=secret") ?? ""
         require(!reason.contains("secret"), "Classified errors do not echo server output")
         require(!OpenConnectProcess.isSessionPath("/var/run/vpnmenubar.x/../../etc"), "Session traversal rejected")
+        require(OpenConnectProcess.exitDiagnostic("VPNMB_SUPERVISOR_TERM\nUser cancelled (SIGINT/SIGTERM); exiting.", status: nil).contains("supervisor_term,signal_cancelled"), "Supervisor signal is distinct from child signal")
+        require(OpenConnectProcess.exitDiagnostic("VPNMB_CONTROL_CLOSED", status: "0").contains("control_closed"), "Client control closure has distinct evidence")
+        let ended = OpenConnectProcess.exitDiagnostic("Session terminated by server; exiting. Cookie: secret", status: "1\n")
+        require(ended.contains("exit=1") && ended.contains("server_terminated") && !ended.contains("secret"), "Server termination is classified without raw output")
+        let rejected = OpenConnectProcess.exitDiagnostic("Cookie was rejected by server; exiting.", status: "2")
+        require(rejected.contains("cookie_rejected") && rejected.contains("exit=2"), "Expired/rejected session cookie is distinguishable")
+        let network = OpenConnectProcess.exitDiagnostic("CSTP Dead Peer Detection detected dead peer!\nReconnect failed", status: "1")
+        require(network.contains("dead_peer") && network.contains("reconnect_failed"), "Network evidence is retained")
+        for status in ["secret", "999", "1\nsecret", "-1"] {
+            let safe = OpenConnectProcess.exitDiagnostic("Authorization: secret", status: status)
+            require(safe == "VPN process ended: exit=unavailable events=unclassified", "Invalid diagnostics cannot expose data")
+        }
         print("PASS: no secret argv, no global kill/route command, bounded diagnostic classification")
 
         try ManagedRuntime.checks(directory: FileManager.default.currentDirectoryPath + "/VPNMenuBar/Resources/BundledRuntime").write(to: dir.appendingPathComponent("validate.sh"), atomically: true, encoding: .utf8)
@@ -68,7 +80,9 @@ struct SecurityHardeningTests {
         [ "$1" = --script ] || exit 5
         /bin/sh -c "$2" || exit 6
         printf 'Connected as fixture\\n'
-        exec /bin/sleep 120
+        # A real VPN runs a disconnect script before exiting; teardown must wait for it.
+        trap '/bin/kill "$timer" 2>/dev/null || true; wait "$timer" 2>/dev/null || true; /bin/sleep 0.3; printf "CLEANUP_DONE\\n"; exit 0' TERM
+        while :; do /bin/sleep 120 & timer=$!; wait "$timer"; done
         """
         try fake.write(toFile: fixtureRuntime, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixtureRuntime)

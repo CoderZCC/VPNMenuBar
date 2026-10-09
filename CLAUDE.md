@@ -22,11 +22,11 @@ SwiftUI menu-bar app targeting macOS 13+. UI → Core → Config / Dependencies 
 
 ## Runtime compatibility and review packages
 
-- Current review build: 0.2.25, Apple Silicon only, compiled for macOS 13. Intel is not supported by the current package. Never lower only Info.plist or Mach-O declarations to claim compatibility.
+- Current review build: 0.2.28, Apple Silicon only, compiled for macOS 13. Intel is not supported by the current package. Never lower only Info.plist or Mach-O declarations to claim compatibility.
 - `scripts/build-compatible-runtime.py` rebuilds pinned sources under `build/runtime-macos13` without system installation. Required build tools include Xcode/CLT, Python, Ninja, pkg-config and GNU Autoconf/Automake/Libtool; XcodeGen generates the app project. Runtime users do not need these tools.
 - Keep the gnulib `strchrnul` compatibility overrides and availability diagnostics: configure probes on a newer host can otherwise select APIs absent on macOS 13. Packaging must reject libraries above the requested minimum OS and preserve the existing OpenConnect feature set.
 - After changing the source pins or build recipe, use a fresh build cache as appropriate; cached `.done` markers are not independent rebuild evidence. Preserve compiled hash, payload and notice publication as one transaction.
-- The 0.2.25 Release build, all 14 Mach-O minimum-version checks, strict ad-hoc signature verification and security regression suite passed on macOS 26. The isolated p11-kit build passed 44 upstream tests. Actual macOS 13/14/15 connection, DNS/routing cleanup and sleep/reconnect acceptance remain pending. Earlier 0.2.24 real connections do not prove the rebuilt runtime works on older systems.
+- The 0.2.25 Release build, all 14 Mach-O minimum-version checks, strict ad-hoc signature verification and security regression suite passed on macOS 26. The isolated p11-kit build passed 44 upstream tests. Actual macOS 13/14/15 connection, DNS/routing cleanup and sleep/reconnect acceptance remain pending. Earlier 0.2.24 real connections do not prove the rebuilt runtime works on older systems. 0.2.28 repeated these checks and, installed on macOS 26.1, kept a session alive across an authtrampoline idle-exit (see `docs/lessons/2026-10-09-authtrampoline-idle-exit-group-kill.md`).
 - Review DMGs and their SHA-256 inventory live in `artifacts/it-review/` on `codex/vpn-security-bundled-runtime`. A review-branch artifact is not a GitHub Release or IT approval. Update package notes and download links when replacing a DMG; never include personal settings or credentials.
 - Ad-hoc signature integrity checks do not establish Developer ID signing, notarization or managed-device acceptance.
 
