@@ -1,10 +1,11 @@
-VPNMenuBar 0.2.28 - IT review build
+VPNMenuBar 0.2.29 - IT review build
 
 Source branch: codex/vpn-security-bundled-runtime
-Source commit: 92bbf63ea134a0dcdf1b449e80877233f8903b6c
+Source commit: 54b529d9b126b7d7f7ffeadd79cba4d460ece740
 Apple Silicon; built with macOS 13.0 minimum deployment target.
 Intel is not supported by this package.
 Fixes periodic disconnects caused by the VPN session sharing the authorization helper's process group.
+Fixes reconnect failures after a network switch left a stale host route to the VPN gateway.
 Build and security tests passed on macOS 26; actual macOS 13/14/15 testing remains pending.
 Ad-hoc signed with Hardened Runtime; not Developer ID signed or notarized.
 Administrator authorization is required to connect.

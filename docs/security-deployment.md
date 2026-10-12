@@ -25,7 +25,7 @@ The app invokes macOS system authorization for session preparation. It verifies 
 
 The root supervisor owns a freshly created session directory under `/var/run`. Credential and control FIFOs are 0600 and owned by the initiating UID; the containing directory is root-owned. The credential is never in AppleScript arguments or a regular file. Closing control stops only the supervised child. An unattached session times out. Runtime output remains in a bounded in-memory buffer; only fixed error classifications reach logs/UI. FIFO permissions prevent other accounts from accessing credentials; they do not isolate processes running under the same user.
 
-Automatic reconnect may request administrator authorization. No unconditional route scrub or global `pkill` remains. Verify the frozen script's routing cleanup on each supported gateway and network transition.
+Automatic reconnect may request administrator authorization. No unconditional route scrub or global `pkill` remains; the only route change is deleting a gateway host route whose next hop is off-link, re-verified as root inside the session launch. Verify the frozen script's routing cleanup on each supported gateway and network transition.
 
 DNS changes preserve the gateway-domain guard, reject unmanaged/symlink destinations and stage replacement content inside the root-owned resolver directory. Validate conflict handling and authorization cancellation on a test machine before distribution.
 
@@ -48,6 +48,8 @@ Additional execution tests exercise resolver creation/replacement, readable dire
 Local evidence on 2026-10-08: the previous bundled App (0.2.24) connected successfully on the current macOS 26 machine. The macOS 13-targeted 0.2.25 rebuild passed the Release build, strict ad-hoc signature verification, all 14 Mach-O minimum-version checks, OpenConnect feature comparison and the security regression suite, including actual GnuTLS/p11-kit isolation checks. The isolated p11-kit rebuild passed 44 upstream tests. These results do not establish real connection or compatibility on an older OS. Real macOS 13/14/15 connect/disconnect, routing/DNS cleanup, sleep/reconnect and managed-device acceptance remain pending. No old-OS test device was available during this build.
 
 Local evidence on 2026-10-09: 0.2.28 detaches the session supervisor from the authorization job's process group. Before this change, installed builds disconnected whenever launchd retired an idle `authtrampoline`. Installed 0.2.28 on macOS 26.1 stayed connected across that event. The same Release, signature, Mach-O minimum-version and regression checks passed. Older-OS acceptance remains pending.
+
+Local evidence on 2026-10-12: a subnet switch while connected left off-link host routes to both gateway IPs, and every reconnect failed with EADDRNOTAVAIL until they were deleted manually. 0.2.29 removes such routes before connecting. Release, strict signature, all 14 Mach-O minimum-version checks and the regression suite passed; the installed build has not yet been exercised across a real subnet switch.
 
 ## Isolated crypto configuration and packaging
 
