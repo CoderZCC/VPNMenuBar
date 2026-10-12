@@ -126,7 +126,7 @@ final class VPNController: ObservableObject {
     /// intermediate unreachable state. The openconnect child is still alive
     /// but its tunnel is bound to the previous interface and cannot route, so
     /// drop it and let the auto-reconnect path bring it back on the new
-    /// interface (which also runs cleanupStaleHostRoute — see Quirk #11).
+    /// interface (whose prepare removes the stale gateway host route).
     private func handleInterfaceChange() async {
         AppLogger.shared.info("interface change detected (state=\(state))")
         guard case .connected = state else { return }

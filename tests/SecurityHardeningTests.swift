@@ -53,6 +53,75 @@ struct SecurityHardeningTests {
         }
         print("PASS: no secret argv, no global kill/route command, bounded diagnostic classification")
 
+        // Fixtures are real `route -n get` shapes from a Mac that switched subnets mid-session.
+        let staleGatewayRoute = "   route to: 188.116.30.172\ndestination: 188.116.30.172\n    gateway: 10.66.33.254\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,STATIC>\n"
+        let defaultRoute = "   route to: 188.116.30.172\ndestination: default\n       mask: default\n    gateway: 10.66.17.254\n  interface: en0\n"
+        let onLinkHop = "   route to: 10.66.17.254\ndestination: 10.66.17.254\n  interface: en0\n      flags: <UP,HOST,DONE,LLINFO,WASCLONED,IFSCOPE,IFREF,ROUTER>\n"
+        let offLinkHop = "   route to: 10.66.33.254\ndestination: default\n       mask: default\n    gateway: 10.66.17.254\n  interface: en0\n"
+        let table = """
+        Destination        Gateway            Flags               Netif Expire
+        default            10.66.17.254       UGScg                 en0
+        10.66.17/24        link#14            UCS                   en0      !
+        10.66.17.254       f0:33:e5:a0:3:f3   UHLWIir               en0   1181
+        77.242.243.181     10.66.34.254       UGHS                  en0
+        188.116.30.172     10.66.33.254       UGHS                  en0
+        203.0.113.9        10.66.35.254       UGHS                  en0
+        """
+        let gatewayIPs = OpenConnectProcess.resolvedIPv4Addresses("name: vpn.example.com\nip_address: 188.116.30.172\nip_address: 77.242.243.181\n\nname: vpn.example.com\nipv6_address: 2001:db8::1\n")
+        require(gatewayIPs == ["188.116.30.172", "77.242.243.181"], "Every round-robin IPv4 address is checked")
+        // Deleting the default route took down whole machines in v0.2.3; other tools' host routes are not ours.
+        require(OpenConnectProcess.gatewayHostRoutes(addresses: gatewayIPs + ["10.66.17.254"], netstatOutput: table)
+                == [StaleHostRoute(address: "77.242.243.181", hop: "10.66.34.254")!, StaleHostRoute(address: "188.116.30.172", hop: "10.66.33.254")!],
+                "Only gateway host routes to the VPN server are candidates")
+        require(OpenConnectProcess.isOffLink(hopRouteOutput: offLinkHop), "Router on a former subnet is stale")
+        require(!OpenConnectProcess.isOffLink(hopRouteOutput: onLinkHop), "Router on the current subnet is kept")
+        final class RouteRunner: ProcessRunning {
+            let table: String
+            var calls: [String] = []
+            init(table: String) { self.table = table }
+            func run(executable: String, arguments: [String], timeoutSeconds: TimeInterval?) throws -> ProcessResult {
+                calls.append(([executable] + arguments).joined(separator: " "))
+                precondition(timeoutSeconds != nil, "Pre-connect probes must be bounded")
+                switch arguments.last {
+                case "vpn.example.com": return ProcessResult(exitCode: 0, stdout: "ip_address: 188.116.30.172\nip_address: 77.242.243.181\n", stderr: "")
+                case "inet": return ProcessResult(exitCode: 0, stdout: table, stderr: "")
+                case "10.66.33.254": return ProcessResult(exitCode: 0, stdout: "   route to: 10.66.33.254\ndestination: default\n    gateway: 10.66.17.254\n", stderr: "")
+                case "10.66.34.254": return ProcessResult(exitCode: 0, stdout: "   route to: 10.66.34.254\ndestination: 10.66.34.0\n  interface: en0\n", stderr: "")
+                default: return ProcessResult(exitCode: 1, stdout: "", stderr: "")
+                }
+            }
+        }
+        let routeRunner = RouteRunner(table: table)
+        require(OpenConnectProcess.staleGatewayRoutes(host: "vpn.example.com", runner: routeRunner) == [StaleHostRoute(address: "188.116.30.172", hop: "10.66.33.254")!],
+                "Only the off-link next hop is stale")
+        require(routeRunner.calls.contains("/sbin/route -n get -host 10.66.33.254") && !routeRunner.calls.contains { $0.contains("delete") },
+                "Detection looks up the next hop and never changes routes")
+        let healthyRunner = RouteRunner(table: "default 10.66.17.254 UGScg en0\n188.116.30.172 10.66.17.254 UGHS en0\n")
+        require(OpenConnectProcess.staleGatewayRoutes(host: "vpn.example.com", runner: healthyRunner).isEmpty, "Route via the current router is kept")
+        require(StaleHostRoute(address: "1.2.3.4'; touch /tmp/x; '", hop: "10.0.0.1") == nil
+                && StaleHostRoute(address: "default", hop: "10.0.0.1") == nil
+                && StaleHostRoute(address: "10.66.17/24", hop: "10.0.0.1") == nil
+                && StaleHostRoute(address: "1.2.3.4", hop: "link#14") == nil, "Only IPv4 literals reach root")
+        let routeFixture = dir.appendingPathComponent("route-fixture")
+        try FileManager.default.createDirectory(at: routeFixture, withIntermediateDirectories: true)
+        let fakeRoute = routeFixture.appendingPathComponent("route").path
+        try "#!/bin/sh\nif [ \"$2\" = get ]; then cat \"$(dirname \"$0\")/get\"; else echo \"$*\" >> \"$(dirname \"$0\")/deleted\"; fi\n"
+            .write(toFile: fakeRoute, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeRoute)
+        let removal = OpenConnectProcess.staleRouteRemovalCommand([StaleHostRoute(address: "188.116.30.172", hop: "10.66.33.254")!])
+            .replacingOccurrences(of: "/sbin/route", with: PrivilegedCommand.quote(fakeRoute))
+        let deleted = routeFixture.appendingPathComponent("deleted")
+        for (current, expected) in [(staleGatewayRoute, "-n delete -host 188.116.30.172 10.66.33.254\n"), (defaultRoute, nil), (onLinkHop, nil)] {
+            try? FileManager.default.removeItem(at: deleted)
+            try current.write(to: routeFixture.appendingPathComponent("get"), atomically: true, encoding: .utf8)
+            let ran = try SystemProcessRunner().run(executable: "/bin/sh", arguments: ["-c", "set -eu\n" + removal], timeoutSeconds: 5)
+            require(ran.succeeded, "Route removal must never abort the session launch")
+            require((try? String(contentsOf: deleted, encoding: .utf8)) == expected, "Root deletes only the exact re-verified stale pair")
+        }
+        let withRoute = OpenConnectProcess.launchCommand(config: config, uid: getuid(), staleRoutes: [StaleHostRoute(address: "188.116.30.172", hop: "10.66.33.254")!])
+        require(withRoute.contains("/sbin/route -n delete -host '188.116.30.172' '10.66.33.254'") && !withRoute.contains("delete default"), "Scoped deletion only")
+        print("PASS: stale gateway host route detection and root-side exact-pair removal")
+
         try ManagedRuntime.checks(directory: FileManager.default.currentDirectoryPath + "/VPNMenuBar/Resources/BundledRuntime").write(to: dir.appendingPathComponent("validate.sh"), atomically: true, encoding: .utf8)
         try ManagedRuntime.stagingCommand.replacingOccurrences(of: ManagedRuntime.directory,
             with: FileManager.default.currentDirectoryPath + "/VPNMenuBar/Resources/BundledRuntime")

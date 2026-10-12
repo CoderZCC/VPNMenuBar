@@ -34,7 +34,24 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
     func prepare(config: VPNConfig) throws {
         try stop()
         try ManagedRuntime.validateConfiguration(config)
-        let path = try PrivilegedCommand.run(Self.launchCommand(config: config, uid: getuid()))
+        let runner = SystemProcessRunner()
+        let host = Self.extractHost(from: config.gateway)
+        let staleRoutes = Self.staleGatewayRoutes(host: host, runner: runner)
+        for route in staleRoutes {
+            AppLogger.shared.info("pre-connect: stale host route to \(route.address) via \(route.hop) (next hop is not on an attached subnet)")
+        }
+        let path = try PrivilegedCommand.run(Self.launchCommand(config: config, uid: getuid(), staleRoutes: staleRoutes))
+        if !staleRoutes.isEmpty {
+            // Root re-checks each pair and may skip it; report what the table actually shows.
+            let remaining = Self.staleGatewayRoutes(host: host, runner: runner)
+            for route in staleRoutes {
+                if remaining.contains(route) {
+                    AppLogger.shared.error("pre-connect: stale host route to \(route.address) via \(route.hop) is still present")
+                } else {
+                    AppLogger.shared.info("pre-connect: removed stale host route to \(route.address) via \(route.hop)")
+                }
+            }
+        }
         guard Self.isSessionPath(path) else {
             throw DependencyInstallError.unsupported(reason: "Invalid response from the authorized VPN session.")
         }
@@ -178,7 +195,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 
-    static func launchCommand(config: VPNConfig, uid: uid_t) -> String {
+    static func launchCommand(config: VPNConfig, uid: uid_t, staleRoutes: [StaleHostRoute] = []) -> String {
         let q = PrivilegedCommand.quote
         // OpenConnect evaluates --script with sh -c, after the outer shell parses argv.
         var arguments = ["--script", "./vpnc-script--no-dns",
@@ -260,7 +277,7 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
         wait "$status_timer"
         status_timer=
         """
-        return "set -eu\nexport PATH=/usr/bin:/bin:/usr/sbin:/sbin\nunset DYLD_LIBRARY_PATH DYLD_INSERT_LIBRARIES DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH\n" + DependencyInstaller.legacyRemovalCommand(username: NSUserName()) + "\n" + """
+        return "set -eu\nexport PATH=/usr/bin:/bin:/usr/sbin:/sbin\nunset DYLD_LIBRARY_PATH DYLD_INSERT_LIBRARIES DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH\n" + DependencyInstaller.legacyRemovalCommand(username: NSUserName()) + "\n" + staleRouteRemovalCommand(staleRoutes) + """
         umask 077
         if [ ! -e /var/run/vpnc ]; then /bin/mkdir -m 755 /var/run/vpnc; fi
         [ -d /var/run/vpnc ] && [ ! -L /var/run/vpnc ] || exit 40
@@ -289,5 +306,87 @@ final class OpenConnectProcess: OpenConnectProcessRunning {
     static func extractHost(from gateway: String) -> String {
         let value = gateway.contains("://") ? gateway : "https://" + gateway
         return URLComponents(string: value)?.host ?? ""
+    }
+
+    /// vpnc-script pins a host route to the gateway via the physical router. A network
+    /// switch before teardown leaves it pointing at the old router, and every later
+    /// connect fails with EADDRNOTAVAIL. Detection is unprivileged; root re-checks the pair.
+    static func staleGatewayRoutes(host: String, runner: ProcessRunning) -> [StaleHostRoute] {
+        func output(_ executable: String, _ arguments: [String]) -> String? {
+            guard let result = try? runner.run(executable: executable, arguments: arguments, timeoutSeconds: 2),
+                  result.succeeded else { return nil }
+            return result.stdout
+        }
+        // Bounded lookup: a broken resolver must not stall the connect path.
+        let addresses = ResolverRule.isValidIPv4(host) ? [host]
+            : output("/usr/bin/dscacheutil", ["-q", "host", "-a", "name", host]).map(resolvedIPv4Addresses) ?? []
+        guard !addresses.isEmpty, let table = output("/usr/sbin/netstat", ["-rn", "-f", "inet"]) else { return [] }
+        // Only candidate host routes need a next-hop lookup; normally there are none.
+        return gatewayHostRoutes(addresses: addresses, netstatOutput: table).filter { route in
+            output("/sbin/route", ["-n", "get", "-host", route.hop]).map(isOffLink) ?? false
+        }
+    }
+
+    static func resolvedIPv4Addresses(_ dscacheutilOutput: String) -> [String] {
+        var addresses: [String] = []
+        for line in dscacheutilOutput.split(separator: "\n") {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count == 2, parts[0] == "ip_address:", ResolverRule.isValidIPv4(String(parts[1])) else { continue }
+            if !addresses.contains(String(parts[1])) { addresses.append(String(parts[1])) }
+        }
+        return addresses
+    }
+
+    /// Gateway (G) host (H) routes to any of `addresses`; default and subnet routes never match.
+    static func gatewayHostRoutes(addresses: [String], netstatOutput: String) -> [StaleHostRoute] {
+        var routes: [StaleHostRoute] = []
+        for line in netstatOutput.split(separator: "\n") {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard parts.count >= 3, addresses.contains(parts[0]),
+                  parts[2].contains("G"), parts[2].contains("H"),
+                  let route = StaleHostRoute(address: parts[0], hop: parts[1]), !routes.contains(route) else { continue }
+            routes.append(route)
+        }
+        return routes
+    }
+
+    /// An on-link next hop resolves without a gateway; an off-link one needs another router.
+    static func isOffLink(hopRouteOutput: String) -> Bool {
+        routeField("gateway", in: hopRouteOutput) != nil
+    }
+
+    static func routeField(_ name: String, in output: String) -> String? {
+        for line in output.split(separator: "\n") {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            if parts.count == 2, parts[0] == name + ":" { return String(parts[1]) }
+        }
+        return nil
+    }
+
+    static func staleRouteRemovalCommand(_ routes: [StaleHostRoute]) -> String {
+        let q = PrivilegedCommand.quote
+        return routes.map { route in
+            let address = q(route.address), hop = q(route.hop)
+            // Delete only the exact host route still pointing at the observed next hop.
+            return """
+            route_info=$(/sbin/route -n get -host \(address) 2>/dev/null || true)
+            if [ "$(/usr/bin/printf '%s\\n' "$route_info" | /usr/bin/awk '$1=="destination:"{print $2}')" = \(address) ] && [ "$(/usr/bin/printf '%s\\n' "$route_info" | /usr/bin/awk '$1=="gateway:"{print $2}')" = \(hop) ]; then
+              /sbin/route -n delete -host \(address) \(hop) >/dev/null 2>&1 || true
+            fi
+
+            """
+        }.joined()
+    }
+}
+
+/// A host route whose fields are validated IPv4 literals, safe for the root command.
+struct StaleHostRoute: Equatable {
+    let address: String
+    let hop: String
+
+    init?(address: String, hop: String) {
+        guard ResolverRule.isValidIPv4(address), ResolverRule.isValidIPv4(hop) else { return nil }
+        self.address = address
+        self.hop = hop
     }
 }

@@ -1,0 +1,11 @@
+# Remove the stale gateway host route left by a network switch
+
+After the Mac moved subnets while connected (10.66.33.x/34.x → 10.66.17.x), every connect failed with `VPN process exited before the tunnel was established`, sometimes within 250 ms. DNS resolved the gateway normally; `nc -vz <gateway-ip> 443` failed with `Can't assign requested address` (EADDRNOTAVAIL).
+
+vpnc-script adds a host route to the VPN gateway via the physical router (`netstat -rn` shows `UGHS`). When the network changes before teardown completes, that route survives and points at the old router, which is not on any attached subnet. Each gateway IP of the round-robin name can collect its own stale route from a different session.
+
+The pre-hardening app removed this route through `sudo -n /sbin/route` (Quirk #11). The managed-deployment rewrite dropped passwordless sudo and, with it, the cleanup, leaving only a dangling comment; the security test even asserted the launch command contained no `/sbin/route`. When removing a privilege path, enumerate the behaviors that relied on it.
+
+`OpenConnectProcess.prepare` now detects candidates unprivileged and with bounded probes: gateway IPv4 addresses from `dscacheutil` (2 s timeout; never an unbounded `getaddrinfo` before the authorization prompt), one `netstat -rn -f inet` read for gateway host (`G`+`H`) routes to those addresses, and `route get` only for a candidate's next hop — a `gateway:` line means it is off-link. The default route, subnet routes and other tools' host routes are never candidates. The validated pairs go into the existing authorized launch command, which re-checks the exact address/next-hop pair as root before `route -n delete -host <ip> <hop>`; failures never abort the launch. After authorization the table is read again and the log records `removed` or `still present` — never log a privileged action as done before it ran.
+
+Recovery without the fix: `sudo route -n delete <gateway-ip>` for each stale entry. Diagnose with `netstat -rn -f inet | grep <gateway-ip>` and `route -n get <next-hop>` (a `gateway:` line means off-link). Unprivileged fixtures cover detection and the root snippet; an installed build reproducing a subnet switch has not yet been tested.
